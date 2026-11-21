@@ -1,11 +1,13 @@
-// Verification suite for the token-radar-01 entry (radar-2) — ticket 07, spec D6.
+// Verification suite for the token-radar-01 entry (radar-3) — ticket 14, spec D14.
 //
-// Checks V1–V14, all local, no network, stdlib only (Node 22). V13 renders the
-// dashboard headlessly by spawning the system Python Playwright (the same
+// Checks V1–V21, all local, no network, stdlib only (Node 22). V13/V20 render
+// the dashboard headlessly by spawning the system Python Playwright (the same
 // method as the pre-build screenshot run); the script itself imports nothing
-// but node: builtins. V12 recomputes implied values from the snapshot with an
-// independent re-implementation of the spec D1 formula written here — it never
-// imports lib/model.ts, so a bug shared with the entry cannot hide.
+// but node: builtins. V12′/V15/V16/V17/V21 recompute the fitted model, the
+// odds, the bootstrap and the held-out metrics from the snapshot with
+// independent re-implementations written here — they never import
+// lib/model.ts, lib/ols.ts or lib/bootstrap.ts, so a bug shared with the
+// entry cannot hide.
 //
 // Run from the entry repo root:
 //   node scripts/verify.mjs [--snapshot <file>] [--keep <dir>]
@@ -44,6 +46,35 @@ const SPEC = {
   growthWeight: 0.6, growthLo: -40, growthHi: 60,
   maturityFloor: 0.7, maturityRange: 0.3, maturityDays: 1095, unknownAge: 365,
 };
+
+// --- spec D8 fitted-model constants (quoted 6 dp, as the entry hardcodes) ---
+const FIT = {
+  intercept: 8.028969, slope: 0.463147,
+  effects: {
+    'Basis Trading': 1.070305, Bridge: -0.111419, CEX: 0.867641,
+    'Canonical Bridge': 0.754849, Dexs: 0.064547, Lending: -0.631826,
+    'Liquid Staking': -0.964243, RWA: 0.179798, Yield: -0.786214,
+  },
+  floor: 0.08, cap: 0.6,
+};
+// --- spec D9 odds coefficients (quoted 6 dp) + exact peer share 416/758 ---
+const ODDS_Q = [-3.040781, 0.446892, -3.061039, 1.329665];
+const ODDS_PRIOR = 5;
+const LIVE_SHARE_EXACT = 416 / 758;
+const EXCLUDED_CATEGORIES = new Set([
+  'CEX', 'Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC',
+]);
+const EXCHANGE_NAMES = [
+  'Binance', 'Coinbase', 'Kraken', 'Bybit', 'OKX', 'Bitget', 'KuCoin',
+  'Huobi', 'Gate', 'Gemini', 'Bitstamp', 'Bitfinex', 'Crypto.com',
+  'HTX', 'MEXC', 'Bithumb', 'Upbit', 'Deribit',
+];
+const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
+const Z_90 = 1.2816;
+const SPLIT_SEED = 20261122;
+const BOOTSTRAP_B = 200;
+const BOOTSTRAP_SEED = 20261122;
+
 const PLAIN_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const JPEG_MAGIC = [0xff, 0xd8, 0xff];
@@ -73,6 +104,95 @@ const median = (xs) => {
   return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
 };
 const DAY_MS = 86_400_000;
+const round2 = (x) => Math.round(x * 100) / 100;
+
+// --- independent numerics (written here; never imported from lib/) ---
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function solveV(A, b) {
+  const n = b.length;
+  const M = A.map((r, i) => [...r, b[i]]);
+  for (let c = 0; c < n; c++) {
+    let piv = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+    [M[c], M[piv]] = [M[piv], M[c]];
+    const d = M[c][c];
+    if (d === 0) throw new Error('singular matrix');
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r][c] / d;
+      for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+    }
+  }
+  return M.map((r, i) => r[n] / M[i][i]);
+}
+function olsV(X, y) {
+  const k = X[0].length;
+  const XtX = Array.from({ length: k }, () => new Array(k).fill(0));
+  const Xty = new Array(k).fill(0);
+  for (let i = 0; i < X.length; i++) {
+    for (let a = 0; a < k; a++) {
+      Xty[a] += X[i][a] * y[i];
+      for (let b = 0; b < k; b++) XtX[a][b] += X[i][a] * X[i][b];
+    }
+  }
+  return solveV(XtX, Xty);
+}
+// Bootstrap OLS: drop an all-zero dummy column (unidentified in that
+// resample) and return effect 0 for it — the honest rule, not the NaN
+// artifact of the spec-time script (see BUILD.md radar-3, deviation 4).
+function olsBootstrapV(X, y) {
+  const k = X[0].length;
+  const keep = [];
+  for (let a = 0; a < k; a++) {
+    let nz = false;
+    for (let i = 0; i < X.length; i++) if (X[i][a] !== 0) { nz = true; break; }
+    if (nz) keep.push(a);
+  }
+  const br = olsV(X.map((r) => keep.map((a) => r[a])), y);
+  const out = new Array(k).fill(0);
+  keep.forEach((a, i) => { out[a] = br[i]; });
+  return out;
+}
+const dotV = (r, b) => r.reduce((s, v, i) => s + v * b[i], 0);
+function irlsV(X, y) {
+  let w = new Array(X[0].length).fill(0);
+  let iters = 0;
+  for (let it = 0; it < 100; it++) {
+    iters = it + 1;
+    const W = [];
+    const z = [];
+    for (let i = 0; i < X.length; i++) {
+      const eta = dotV(X[i], w);
+      const mu = 1 / (1 + Math.exp(-clamp(eta, -30, 30)));
+      const v = Math.max(mu * (1 - mu), 1e-9);
+      W.push(v);
+      z.push(eta + (y[i] - mu) / v);
+    }
+    const k = X[0].length;
+    const XtWX = Array.from({ length: k }, () => new Array(k).fill(0));
+    const XtWz = new Array(k).fill(0);
+    for (let i = 0; i < X.length; i++) {
+      for (let a = 0; a < k; a++) {
+        XtWz[a] += W[i] * X[i][a] * z[i];
+        for (let b = 0; b < k; b++) XtWX[a][b] += W[i] * X[i][a] * X[i][b];
+      }
+    }
+    const nw = solveV(XtWX, XtWz);
+    const delta = Math.max(...nw.map((v, i) => Math.abs(v - w[i])));
+    w = nw;
+    if (delta < 1e-10) break;
+  }
+  return { beta: w, iters };
+}
 
 /** Independent radar-2 recompute from one snapshot row (spec D1r, written here). */
 function impliedIndependent(p, asOf) {
@@ -85,6 +205,94 @@ function impliedIndependent(p, asOf) {
   const ageForModel = age ?? SPEC.unknownAge;
   const maturity = SPEC.maturityFloor + (Math.min(Math.max(ageForModel, 0), SPEC.maturityDays) / SPEC.maturityDays) * SPEC.maturityRange;
   return { implied: Math.max(1, Math.round(p.tvl_usd * base * size * growth * maturity)), base, size, growthPct, growth, maturity, age };
+}
+
+// --- independent radar-3 model (spec D8/D9/D11, written here) ---
+function ageDaysV(asOf, listedAt) {
+  if (listedAt === null) return null;
+  return Math.max(0, Math.floor((Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${listedAt}T00:00:00Z`)) / DAY_MS));
+}
+function growthMaturityV(p, asOf) {
+  const age = ageDaysV(asOf, p.listed_at);
+  const growthPct = clamp(p.change_7d ?? 0, SPEC.growthLo, SPEC.growthHi);
+  const growthMult = 1 + (SPEC.growthWeight * growthPct) / 100;
+  const ageForModel = age ?? SPEC.unknownAge;
+  const maturityMult = SPEC.maturityFloor
+    + (Math.min(Math.max(ageForModel, 0), SPEC.maturityDays) / SPEC.maturityDays) * SPEC.maturityRange;
+  return { growthPct, growthMult, maturityMult, age };
+}
+function fittedImpliedV(p, asOf) {
+  const effect = p.category !== null ? (FIT.effects[p.category] ?? 0) : 0;
+  const raw = Math.exp(FIT.intercept + (FIT.slope - 1) * Math.log(p.tvl_usd) + effect);
+  const multiple = clamp(raw, FIT.floor, FIT.cap);
+  const gm = growthMaturityV(p, asOf);
+  return {
+    implied: Math.max(1, Math.round(p.tvl_usd * multiple * gm.growthMult * gm.maturityMult)),
+    raw, multiple, effect, atClampBound: raw < FIT.floor || raw > FIT.cap, ...gm,
+  };
+}
+function liveDesignV(snapshot) {
+  const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  const catN = {};
+  for (const p of live) catN[p.category ?? ''] = (catN[p.category ?? ''] ?? 0) + 1;
+  const big = Object.entries(catN).filter(([, n]) => n >= 5).map(([c]) => c).sort();
+  const design = (p) => [1, Math.log(p.tvl_usd), ...big.map((c) => (p.category === c ? 1 : 0))];
+  return { live, big, X: live.map(design), y: live.map((p) => Math.log(p.mcap_usd)) };
+}
+function splitIndicesV(n) {
+  const rng = mulberry32(SPLIT_SEED);
+  const idx = Array.from({ length: n }, (_, i) => i);
+  for (let i = idx.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [idx[i], idx[j]] = [idx[j], idx[i]];
+  }
+  return { test: idx.slice(0, 38), train: idx.slice(38) };
+}
+function peerStatsV(snapshot) {
+  const catTot = {};
+  const catLive = {};
+  for (const p of snapshot.protocols) {
+    const c = p.category ?? '';
+    catTot[c] = (catTot[c] ?? 0) + 1;
+    if (p.symbol !== null) catLive[c] = (catLive[c] ?? 0) + 1;
+  }
+  return { catTot, catLive, liveShare: LIVE_SHARE_EXACT };
+}
+function oddsQuotedV(p, asOf, peers) {
+  const age = ageDaysV(asOf, p.listed_at) ?? SPEC.unknownAge;
+  const growthTerm = clamp(p.change_7d ?? 0, SPEC.growthLo, SPEC.growthHi) / 100;
+  const c = p.category ?? '';
+  const peerShrunk = ((peers.catLive[c] ?? 0) + ODDS_PRIOR * peers.liveShare)
+    / ((peers.catTot[c] ?? 0) + ODDS_PRIOR);
+  const peerLogit = Math.log(peerShrunk / (1 - peerShrunk));
+  const logit = ODDS_Q[0] + ODDS_Q[1] * Math.log(age) + ODDS_Q[2] * growthTerm + ODDS_Q[3] * peerLogit;
+  return { odds: 1 / (1 + Math.exp(-logit)), peerShrunk, peerLogit };
+}
+function farmNettingV(p, asOf, expectedValueUsd) {
+  const age = ageDaysV(asOf, p.listed_at);
+  const capitalTier = p.tvl_usd >= 1_000_000_000 ? 250 : p.tvl_usd >= 100_000_000 ? 150 : p.tvl_usd >= 50_000_000 ? 100 : 50;
+  const holdDays = age === null ? 30 : age < 180 ? 60 : age < 365 ? 45 : 30;
+  const weeks = Math.ceil(holdDays / 7);
+  const gasCore = capitalTier >= 150 ? 8 : 4;
+  const gasTotal = 3 + 2 * gasCore + 2 * weeks;
+  const opportunity = round2((capitalTier * 0.05 * holdDays) / 365);
+  const totalCost = round2(gasTotal + opportunity);
+  const breakEvenShare = totalCost / expectedValueUsd;
+  const verdict = breakEvenShare <= 0.00001 ? 'FARM' : breakEvenShare <= 0.0001 ? 'THIN' : 'SKIP';
+  const hoursActive = (60 + 10 * weeks) / 60;
+  const net1bp = round2(expectedValueUsd * 0.0001 - totalCost);
+  const dollarsPerHour = round2(net1bp / hoursActive);
+  return { capitalTier, holdDays, weeks, gasTotal, opportunity, totalCost, breakEvenShare, hoursActive, net1bp, dollarsPerHour, verdict };
+}
+const isPreTokenV = (p) => p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
+function isBoardEligibleV(p) {
+  return isPreTokenV(p) && p.category !== null && !EXCLUDED_CATEGORIES.has(p.category)
+    && !VERSIONED.test(p.name)
+    && !p.name.toLowerCase().split(/[^a-z]+/).some((w) => w === 'wrapped' || w === 'staked' || w === 'staking')
+    && !EXCHANGE_NAMES.some((e) => {
+      const l = p.name.toLowerCase();
+      return l === e.toLowerCase() || l.startsWith(`${e.toLowerCase()} `) || l.startsWith(`${e.toLowerCase()}.`);
+    });
 }
 
 /** PNG/JPEG dimensions from the file header (no decoder). */
@@ -195,6 +403,7 @@ const shotsDir = join(OUT, 'screenshots');
 const board = JSON.parse(readFileSync(boardPath, 'utf8'));
 const rows = board.rows;
 const boardBytes = statSync(boardPath).size;
+let DATA = null; // parsed data.js payload (set by V10)
 
 // ---------------------------------------------------------------- V2
 {
@@ -237,6 +446,9 @@ const boardBytes = statSync(boardPath).size;
   if (rows.length < 100 || rows.length > 4000) problems.push(`${rows.length} rows outside 100–4000`);
   if (boardBytes > 8 * 1024 * 1024) problems.push(`board.json ${boardBytes} B over 8 MiB`);
   const seen = new Set();
+  const NEW_FIELDS = ['odds', 'expected_value_usd', 'peer_shrunk', 'peer_logit', 'p10_usd', 'p90_usd',
+    'rank_lo', 'rank_hi', 'capital_tier', 'hold_days', 'gas_total_usd', 'opportunity_cost_usd',
+    'farm_cost_usd', 'break_even_share', 'hours_active', 'net_1bp_usd', 'dollars_per_hour'];
   for (const r of rows) {
     if (!snapBySlug.has(r.slug)) problems.push(`${r.slug}: slug not in snapshot`);
     if (seen.has(r.slug)) problems.push(`${r.slug}: duplicate slug`);
@@ -245,7 +457,20 @@ const boardBytes = statSync(boardPath).size;
     if (!Number.isSafeInteger(r.rank) || r.rank <= 0) problems.push(`${r.slug}: rank ${r.rank}`);
     if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0 || r.implied_value_usd > 1e14) problems.push(`${r.slug}: implied ${r.implied_value_usd}`);
     if (!Array.isArray(r.farm_steps)) problems.push(`${r.slug}: farm_steps missing`);
-    if (!r.model || typeof r.model.base_multiple !== 'number') problems.push(`${r.slug}: model breakdown missing`);
+    // radar-3 fitted breakdown (D8); the D1r multiple may appear ONLY as
+    // the labelled d1r_multiple — never as base_multiple.
+    if (!r.model || typeof r.model.fitted_multiple !== 'number' || typeof r.model.fitted_multiple_raw !== 'number'
+      || typeof r.model.d1r_multiple !== 'number' || typeof r.model.growth_multiplier !== 'number'
+      || typeof r.model.maturity_multiplier !== 'number' || r.model.intercept !== FIT.intercept
+      || r.model.slope !== FIT.slope) problems.push(`${r.slug}: fitted model breakdown missing or constants wrong`);
+    if (r.model && r.model.base_multiple !== undefined) problems.push(`${r.slug}: D1r base_multiple leaked into the fitted breakdown`);
+    for (const f of NEW_FIELDS) if (typeof r[f] !== 'number') problems.push(`${r.slug}: radar-3 field ${f} missing`);
+    if (typeof r.verdict !== 'string' || !['FARM', 'THIN', 'SKIP'].includes(r.verdict)) problems.push(`${r.slug}: verdict ${r.verdict}`);
+    if (typeof r.odds === 'number' && !(r.odds > 0 && r.odds < 1)) problems.push(`${r.slug}: odds ${r.odds} outside (0,1)`);
+    if (typeof r.p10_usd === 'number' && typeof r.p90_usd === 'number'
+      && !(r.p10_usd <= r.implied_value_usd && r.implied_value_usd <= r.p90_usd)) problems.push(`${r.slug}: P10/implied/P90 order broken`);
+    if (typeof r.rank_lo === 'number' && typeof r.rank_hi === 'number'
+      && !(r.rank_lo <= r.rank && r.rank <= r.rank_hi)) problems.push(`${r.slug}: rank outside its rank range`);
   }
   record('V3 board_file', problems.length === 0,
     `${rows.length} rows (expect 198), board.json ${boardBytes} B (cap 8 MiB), sha256 ${sha256(readFileSync(boardPath)).slice(0, 16)}…; problems: ${problems.slice(0, 5).join(' | ') || 'none'}`);
@@ -347,11 +572,19 @@ const boardBytes = statSync(boardPath).size;
   if (!m) detail = 'data.js does not match /^window.RADAR={...};\\n$/';
   else {
     const d = JSON.parse(m[1]);
+    DATA = d;
     const mism = [];
     if (d.rows.length !== rows.length) mism.push(`row count data.js ${d.rows.length} vs board ${rows.length}`);
     d.rows.forEach((r, i) => {
       if (rows[i] && (r.slug !== rows[i].slug || r.rank !== rows[i].rank || r.implied_value_usd !== rows[i].implied_value_usd)) mism.push(`row ${i + 1}: ${r.slug}/${r.implied_value_usd} vs ${rows[i].slug}/${rows[i].implied_value_usd}`);
     });
+    if (d.model_version !== 'radar-3') mism.push(`model_version ${d.model_version}, expect radar-3`);
+    for (const k of ['fit', 'odds', 'ledger', 'assumptions', 'verdict_counts', 'median_odds', 'max_ev']) {
+      if (d[k] === undefined) mism.push(`data.js missing ${k}`);
+    }
+    if (!Array.isArray(d.integrity) || d.integrity.length !== 5 || !d.integrity.every((c) => c.pass === true)) {
+      mism.push(`integrity strip not 5/5 PASS (${JSON.stringify(d.integrity)})`);
+    }
     pass = mism.length === 0;
     detail = `data.js ${statSync(dataPath).size} B, ${d.rows.length} rows, live ${d.live.length} rows; mismatches: ${mism.slice(0, 5).join(' | ') || 'none'}`;
   }
@@ -360,35 +593,44 @@ const boardBytes = statSync(boardPath).size;
 
 // ---------------------------------------------------------------- V11
 {
-  const js = readFileSync(dataPath, 'utf8');
-  const d = JSON.parse(js.match(/^window\.RADAR=(\{.*\});\n$/s)[1]);
   const liveInBoard = rows.filter((r) => r.mcap_usd !== null || r.gecko_id !== null || r.symbol !== null);
-  const liveSlugs = new Set(d.live.map((r) => r.slug));
+  const liveSlugs = new Set(DATA.live.map((r) => r.slug));
   const boardSlugs = new Set(rows.map((r) => r.slug));
   const overlap = [...liveSlugs].filter((s) => boardSlugs.has(s));
-  const liveNoMcap = d.live.filter((r) => !(typeof r.mcap_usd === 'number' && r.mcap_usd > 0));
-  const liveSorted = d.live.every((r, i) => i === 0 || r.mcap_usd <= d.live[i - 1].mcap_usd);
+  const liveNoMcap = DATA.live.filter((r) => !(typeof r.mcap_usd === 'number' && r.mcap_usd > 0));
+  const liveSorted = DATA.live.every((r, i) => i === 0 || r.mcap_usd <= DATA.live[i - 1].mcap_usd);
   const top24 = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0)
     .sort((a, b) => b.mcap_usd - a.mcap_usd || (a.slug < b.slug ? -1 : 1)).slice(0, 24).map((p) => p.slug);
-  const liveIsTop24 = JSON.stringify(d.live.map((r) => r.slug)) === JSON.stringify(top24);
-  record('V11 live separation', liveInBoard.length === 0 && overlap.length === 0 && liveNoMcap.length === 0 && d.live.length === 24 && liveIsTop24,
-    `board rows carrying a token marker: ${liveInBoard.length}; live slugs also on board: ${overlap.join(', ') || 'none'}; live rows ${d.live.length} (expect 24), all positive mcap: ${liveNoMcap.length === 0 ? 'yes' : 'NO — ' + liveNoMcap.map((r) => r.slug).join(', ')}; live sorted by mcap desc: ${liveSorted ? 'yes' : 'no'}; live set is exactly the top 24 by mcap: ${liveIsTop24 ? 'yes' : 'NO'}; live categories include CEX: ${d.live.filter((r) => r.category === 'CEX').map((r) => r.slug).join(', ') || 'none'}`);
+  const liveIsTop24 = JSON.stringify(DATA.live.map((r) => r.slug)) === JSON.stringify(top24);
+  record('V11 live separation', liveInBoard.length === 0 && overlap.length === 0 && liveNoMcap.length === 0 && DATA.live.length === 24 && liveIsTop24,
+    `board rows carrying a token marker: ${liveInBoard.length}; live slugs also on board: ${overlap.join(', ') || 'none'}; live rows ${DATA.live.length} (expect 24), all positive mcap: ${liveNoMcap.length === 0 ? 'yes' : 'NO — ' + liveNoMcap.map((r) => r.slug).join(', ')}; live sorted by mcap desc: ${liveSorted ? 'yes' : 'no'}; live set is exactly the top 24 by mcap: ${liveIsTop24 ? 'yes' : 'NO'}; live categories include CEX: ${DATA.live.filter((r) => r.category === 'CEX').map((r) => r.slug).join(', ') || 'none'}`);
 }
 
-// ---------------------------------------------------------------- V12
+// ---------------------------------------------------------------- V12′ (radar-3 fitted spot-check)
 {
+  const peers = peerStatsV(snapshot);
   const mid = Math.floor(rows.length / 2); // rank 99 of 198
   const picks = [rows[0], rows[mid - 1], rows[rows.length - 1]];
   const problems = [];
   const details = [];
   for (const r of picks) {
     const p = snapBySlug.get(r.slug);
-    const v = impliedIndependent(p, snapshot.as_of);
-    const match = v.implied === r.implied_value_usd;
-    if (!match) problems.push(`rank ${r.rank} ${r.slug}: independent $${v.implied.toLocaleString()} vs board $${r.implied_value_usd.toLocaleString()}`);
-    details.push(`rank ${r.rank} ${r.slug}: independent $${v.implied.toLocaleString()} (base ${v.base}, size ${v.size.toFixed(4)}, growth ${v.growthPct}%→${v.growth.toFixed(4)}, maturity ${v.maturity.toFixed(4)}, age ${v.age}) vs board $${r.implied_value_usd.toLocaleString()} — ${match ? 'match' : 'MISMATCH'}`);
+    const v = fittedImpliedV(p, snapshot.as_of);
+    const o = oddsQuotedV(p, snapshot.as_of, peers);
+    const ev = Math.round(v.implied * o.odds);
+    const impOk = v.implied === r.implied_value_usd;
+    const oddsOk = Math.abs(o.odds - r.odds) < 1e-9;
+    const evOk = ev === r.expected_value_usd;
+    if (!impOk || !oddsOk || !evOk) {
+      problems.push(`rank ${r.rank} ${r.slug}: fitted $${v.implied.toLocaleString()} (board $${r.implied_value_usd.toLocaleString()}) odds ${o.odds.toFixed(6)} (board ${r.odds.toFixed(6)}) EV $${ev.toLocaleString()} (board $${r.expected_value_usd.toLocaleString()})`);
+    }
+    details.push(`rank ${r.rank} ${r.slug}: fitted $${v.implied.toLocaleString()} (raw mult ${v.raw.toFixed(4)}→${v.multiple.toFixed(4)}, growth ${v.growthMult.toFixed(4)}, maturity ${v.maturityMult.toFixed(4)}) odds ${o.odds.toFixed(6)} EV $${ev.toLocaleString()} — ${impOk && oddsOk && evOk ? 'match' : 'MISMATCH'}`);
   }
-  record('V12 model spot-check', problems.length === 0, details.join(' || '));
+  // Note (not a failure): the spec prose prints rank-198 mezzanine
+  // $1,492,134, computed with full-precision betas; the quoted 6-dp
+  // constants the entry ships give $1,492,142 (+$8). Same cause as the
+  // worked-example $123 gap — see BUILD.md deviation 7.
+  record('V12 fitted spot-check', problems.length === 0, details.join(' || '));
 }
 
 // ---------------------------------------------------------------- V13
@@ -453,20 +695,320 @@ print(json.dumps(res))
   }
 }
 
-// ---------------------------------------------------------------- S1 (info): spec-analysis recompute
+// ---------------------------------------------------------------- V15 (independent OLS)
+{
+  const { live, big, X, y } = liveDesignV(snapshot);
+  const n = live.length;
+  const k = X[0].length;
+  const beta = olsV(X, y);
+  const pred = X.map((r) => dotV(r, beta));
+  const resid = y.map((v, i) => v - pred[i]);
+  const yMean = y.reduce((a, b) => a + b, 0) / n;
+  const ssTot = y.reduce((s, v) => s + (v - yMean) ** 2, 0);
+  const ssRes = resid.reduce((s, v) => s + v * v, 0);
+  const r2 = 1 - ssRes / ssTot;
+  const residSd = Math.sqrt(ssRes / (n - k));
+  const problems = [];
+  if (beta[0].toFixed(6) !== DATA.fit.intercept.toFixed(6)) problems.push(`intercept ${beta[0].toFixed(6)} vs payload ${DATA.fit.intercept.toFixed(6)}`);
+  if (beta[1].toFixed(6) !== DATA.fit.slope.toFixed(6)) problems.push(`slope ${beta[1].toFixed(6)} vs payload ${DATA.fit.slope.toFixed(6)}`);
+  for (let i = 0; i < big.length; i++) {
+    const eff = beta[2 + i];
+    const want = DATA.fit.effects[big[i]];
+    if (eff.toFixed(6) !== Number(want).toFixed(6)) problems.push(`${big[i]} effect ${eff.toFixed(6)} vs payload ${Number(want).toFixed(6)}`);
+  }
+  if (Math.abs(r2 - DATA.fit.r2) > 0.0005) problems.push(`R² ${r2.toFixed(4)} vs payload ${DATA.fit.r2.toFixed(4)}`);
+  if (Math.abs(residSd - DATA.fit.resid_sd) > 0.005) problems.push(`resid SD ${residSd.toFixed(4)} vs payload ${DATA.fit.resid_sd.toFixed(4)}`);
+  record('V15 independent OLS recompute', problems.length === 0,
+    `n=${n}, k=${k} (intercept + slope + ${big.length} dummies: ${big.join(', ')}); intercept ${beta[0].toFixed(6)}, slope ${beta[1].toFixed(6)}, R² ${r2.toFixed(4)} (±0.0005), resid SD ${residSd.toFixed(4)} (±0.005); problems: ${problems.join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- V16 (independent IRLS + EV + stability gate)
+{
+  const peers = peerStatsV(snapshot);
+  const X = snapshot.protocols.map((p) => {
+    const age = ageDaysV(snapshot.as_of, p.listed_at) ?? SPEC.unknownAge;
+    const growthTerm = clamp(p.change_7d ?? 0, SPEC.growthLo, SPEC.growthHi) / 100;
+    const c = p.category ?? '';
+    const ps = ((peers.catLive[c] ?? 0) + ODDS_PRIOR * peers.liveShare) / ((peers.catTot[c] ?? 0) + ODDS_PRIOR);
+    return [1, Math.log(age), growthTerm, Math.log(ps / (1 - ps))];
+  });
+  const y = snapshot.protocols.map((p) => (p.symbol !== null ? 1 : 0));
+  const { beta, iters } = irlsV(X, y);
+  const problems = [];
+  const fields = ['intercept', 'age', 'growth', 'peer'];
+  beta.forEach((v, i) => {
+    if (v.toFixed(6) !== Number(DATA.odds[fields[i]]).toFixed(6)) {
+      problems.push(`${fields[i]} ${v.toFixed(6)} vs payload ${Number(DATA.odds[fields[i]]).toFixed(6)}`);
+    }
+  });
+  // EV exact on every row, from the quoted constants.
+  let evBad = 0;
+  let evFirst = '';
+  for (const r of rows) {
+    const p = snapBySlug.get(r.slug);
+    const o = oddsQuotedV(p, snapshot.as_of, peers);
+    const ev = Math.round(r.implied_value_usd * o.odds);
+    if (ev !== r.expected_value_usd) {
+      evBad++;
+      if (!evFirst) evFirst = `${r.slug}: recomputed $${ev.toLocaleString()} vs board $${r.expected_value_usd.toLocaleString()}`;
+    }
+  }
+  if (evBad > 0) problems.push(`EV mismatch on ${evBad} rows (first: ${evFirst})`);
+  // Stability gate: D1r ranking over the same eligible set.
+  const d1rTop10 = snapshot.protocols.filter(isBoardEligibleV)
+    .map((p) => ({ slug: p.slug, v: impliedIndependent(p, snapshot.as_of).implied }))
+    .sort((a, b) => b.v - a.v || (a.slug < b.slug ? -1 : 1)).slice(0, 10).map((r) => r.slug);
+  const fitTop10 = rows.slice(0, 10).map((r) => r.slug);
+  const overlap = fitTop10.filter((s) => d1rTop10.includes(s)).length;
+  if (overlap < 7) problems.push(`stability overlap ${overlap}/10 < 7`);
+  if (rows[0].slug !== d1rTop10[0]) problems.push(`rank-1 changed: fitted ${rows[0].slug} vs D1r ${d1rTop10[0]}`);
+  if (rows[0].slug !== 'steakhouse-financial') problems.push(`rank-1 is ${rows[0].slug}, expect steakhouse-financial`);
+  record('V16 independent odds + EV + stability gate', problems.length === 0,
+    `IRLS ${iters} iters (exact peer share 416/758); coefs [${beta.map((v) => v.toFixed(6)).join(', ')}] vs payload; EV exact on ${rows.length - evBad}/${rows.length} rows; gate overlap ${overlap}/10, rank-1 ${rows[0].slug} (D1r ${d1rTop10[0]}); problems: ${problems.join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- V17 (independent bootstrap spot recompute)
+{
+  const { live, big, X, y } = liveDesignV(snapshot);
+  const peers = peerStatsV(snapshot);
+  const t0 = Date.now();
+  const rng = mulberry32(BOOTSTRAP_SEED);
+  const bootRows = rows.map((r) => {
+    const p = snapBySlug.get(r.slug);
+    const gm = growthMaturityV(p, snapshot.as_of);
+    return { slug: r.slug, tvl: p.tvl_usd, category: p.category, growthMult: gm.growthMult, maturityMult: gm.maturityMult };
+  });
+  const vals = bootRows.map(() => []);
+  const ranks = bootRows.map(() => []);
+  for (let b = 0; b < BOOTSTRAP_B; b++) {
+    const sample = [];
+    for (let i = 0; i < X.length; i++) sample.push(Math.floor(rng() * X.length));
+    const beta = olsBootstrapV(sample.map((i) => X[i]), sample.map((i) => y[i]));
+    const preds = bootRows.map((r) => {
+      const eff = r.category !== null && big.includes(r.category) ? beta[2 + big.indexOf(r.category)] : 0;
+      const raw = Math.exp(beta[0] + (beta[1] - 1) * Math.log(r.tvl) + eff);
+      return Math.max(1, Math.round(r.tvl * clamp(raw, FIT.floor, FIT.cap) * r.growthMult * r.maturityMult));
+    });
+    const order = preds.map((v, i) => i)
+      .sort((i, j) => preds[j] - preds[i] || (bootRows[i].slug < bootRows[j].slug ? -1 : 1));
+    order.forEach((ri, pos) => { vals[ri].push(preds[ri]); ranks[ri].push(pos + 1); });
+  }
+  const problems = [];
+  const details = [];
+  for (const rank of [1, 99, 198]) {
+    const i = rank - 1;
+    const vs = [...vals[i]].sort((a, b) => a - b);
+    const p10 = vs[19];
+    const p90 = vs[179];
+    const lo = Math.min(...ranks[i]);
+    const hi = Math.max(...ranks[i]);
+    const r = rows[i];
+    const match = p10 === r.p10_usd && p90 === r.p90_usd && lo === r.rank_lo && hi === r.rank_hi;
+    if (!match) problems.push(`rank ${rank} ${r.slug}: recomputed P10 $${p10.toLocaleString()} P90 $${p90.toLocaleString()} [${lo},${hi}] vs board $${r.p10_usd.toLocaleString()} $${r.p90_usd.toLocaleString()} [${r.rank_lo},${r.rank_hi}]`);
+    details.push(`rank ${rank} ${r.slug}: P10 $${p10.toLocaleString()} P90 $${p90.toLocaleString()} [${lo},${hi}] — ${match ? 'match' : 'MISMATCH'}`);
+  }
+  // Whole-board bootstrap agreement is implied by V1 (both runs byte-identical,
+  // including every row's bootstrap fields) plus this independent spot recompute.
+  record('V17 bootstrap spot recompute', problems.length === 0,
+    `B=${BOOTSTRAP_B} seed ${BOOTSTRAP_SEED}, honest rule (drop unidentified dummy, effect 0), ${Date.now() - t0} ms; ${details.join(' || ')}; problems: ${problems.join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- V18 (netting recompute + verdict counts)
+{
+  const problems = [];
+  const counts = { FARM: 0, THIN: 0, SKIP: 0 };
+  for (const r of rows) {
+    const p = snapBySlug.get(r.slug);
+    const v = farmNettingV(p, snapshot.as_of, r.expected_value_usd);
+    counts[v.verdict]++;
+    const fieldProblems = [];
+    if (v.capitalTier !== r.capital_tier) fieldProblems.push(`tier ${v.capitalTier} vs ${r.capital_tier}`);
+    if (v.holdDays !== r.hold_days) fieldProblems.push(`hold ${v.holdDays} vs ${r.hold_days}`);
+    if (v.gasTotal !== r.gas_total_usd) fieldProblems.push(`gas ${v.gasTotal} vs ${r.gas_total_usd}`);
+    if (v.opportunity !== r.opportunity_cost_usd) fieldProblems.push(`opp ${v.opportunity} vs ${r.opportunity_cost_usd}`);
+    if (v.totalCost !== r.farm_cost_usd) fieldProblems.push(`cost ${v.totalCost} vs ${r.farm_cost_usd}`);
+    if (v.breakEvenShare !== r.break_even_share) fieldProblems.push(`be ${v.breakEvenShare} vs ${r.break_even_share}`);
+    if (v.hoursActive !== r.hours_active) fieldProblems.push(`hours ${v.hoursActive} vs ${r.hours_active}`);
+    if (v.net1bp !== r.net_1bp_usd) fieldProblems.push(`net1bp ${v.net1bp} vs ${r.net_1bp_usd}`);
+    if (v.dollarsPerHour !== r.dollars_per_hour) fieldProblems.push(`$/h ${v.dollarsPerHour} vs ${r.dollars_per_hour}`);
+    if (v.verdict !== r.verdict) fieldProblems.push(`verdict ${v.verdict} vs ${r.verdict}`);
+    if (fieldProblems.length > 0) problems.push(`${r.slug}: ${fieldProblems.join(', ')}`);
+  }
+  const vc = DATA.verdict_counts;
+  if (!(counts.FARM === 104 && counts.THIN === 80 && counts.SKIP === 14)) {
+    problems.push(`counts FARM ${counts.FARM} / THIN ${counts.THIN} / SKIP ${counts.SKIP}, expect 104/80/14`);
+  }
+  if (!(vc.FARM === 104 && vc.THIN === 80 && vc.SKIP === 14)) {
+    problems.push(`payload verdict_counts ${JSON.stringify(vc)}, expect 104/80/14`);
+  }
+  record('V18 farm netting recompute', problems.length === 0,
+    `all ${rows.length} rows recomputed from tier/hold/EV (gas $3 + 2×core + $2/week, opportunity 5%/yr, 1 bp allocation); counts FARM ${counts.FARM} / THIN ${counts.THIN} / SKIP ${counts.SKIP}; problems: ${problems.slice(0, 3).join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- V19 (ledger recompute)
+{
+  const pre = snapshot.protocols.filter(isPreTokenV);
+  const liveTok = snapshot.protocols.filter((p) => !isPreTokenV(p));
+  const boardSlugs = new Set(rows.map((r) => r.slug));
+  const excluded = pre.filter((p) => !boardSlugs.has(p.slug));
+  const byCat = {};
+  for (const p of excluded) byCat[p.category ?? ''] = (byCat[p.category ?? ''] ?? 0) + 1;
+  const excludedByCategory = Object.entries(byCat)
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+  const reasons = { category: 0, versioned: 0, wrapped: 0, exchange: 0, category_null: 0 };
+  for (const p of excluded) {
+    if (p.category !== null && EXCLUDED_CATEGORIES.has(p.category)) reasons.category++;
+    if (VERSIONED.test(p.name)) reasons.versioned++;
+    if (p.name.toLowerCase().split(/[^a-z]+/).some((w) => w === 'wrapped' || w === 'staked' || w === 'staking')) reasons.wrapped++;
+    if (EXCHANGE_NAMES.some((e) => {
+      const l = p.name.toLowerCase();
+      return l === e.toLowerCase() || l.startsWith(`${e.toLowerCase()} `) || l.startsWith(`${e.toLowerCase()}.`);
+    })) reasons.exchange++;
+    if (p.category === null) reasons.category_null++;
+  }
+  const L = DATA.ledger;
+  const problems = [];
+  const expect = {
+    total: snapshot.protocols.length,
+    ranked: rows.length,
+    watchlist: rows.filter((r) => watchlist.includes(r.slug)).length,
+    early: rows.filter((r) => !watchlist.includes(r.slug)).length,
+    excluded_pre: excluded.length,
+    live: liveTok.length,
+    live_mcap_pos: liveTok.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0).length,
+    live_mcap_zero: liveTok.filter((p) => p.mcap_usd === 0).length,
+    live_mcap_neg: liveTok.filter((p) => p.mcap_usd !== null && p.mcap_usd < 0).length,
+    live_mcap_null: liveTok.filter((p) => p.mcap_usd === null).length,
+    live_shown: 24,
+    live_not_shown: liveTok.length - 24,
+  };
+  for (const [k, v] of Object.entries(expect)) {
+    if (L[k] !== v) problems.push(`${k} payload ${L[k]} vs recomputed ${v}`);
+  }
+  if (JSON.stringify(L.excluded_by_category) !== JSON.stringify(excludedByCategory)) {
+    problems.push(`excluded_by_category differs: payload ${JSON.stringify(L.excluded_by_category)} vs recomputed ${JSON.stringify(excludedByCategory)}`);
+  }
+  for (const [k, v] of Object.entries(reasons)) {
+    if (L.reasons[k] !== v) problems.push(`reason ${k} payload ${L.reasons[k]} vs recomputed ${v} (entry's 18-name exchange list)`);
+  }
+  record('V19 ledger recompute', problems.length === 0,
+    `758 = ${expect.ranked} ranked + ${expect.excluded_pre} excluded + ${expect.live} live; reasons category ${reasons.category} / versioned ${reasons.versioned} / wrapped ${reasons.wrapped} / exchange ${reasons.exchange} (entry list, spec-time list gave 14) / category_null ${reasons.category_null}; live ${expect.live_mcap_pos}/${expect.live_mcap_zero}/${expect.live_mcap_neg}/${expect.live_mcap_null}; problems: ${problems.join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- V20 (headless DOM: KPI / integrity / sandbox / verdict filter)
+const V20_PY = `
+import json, sys
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+out = Path(sys.argv[1]); med_odds = sys.argv[2]
+res = {}
+with sync_playwright() as p:
+    b = p.chromium.launch(headless=True)
+    pg = b.new_page(viewport={'width': 1440, 'height': 900})
+    pg.goto((out / 'dashboard' / 'index.html').as_uri())
+    pg.wait_for_selector('#rows tr')
+    pg.wait_for_selector('#kpiStrip div')
+    kpi = {}
+    for div in pg.locator('#kpiStrip div').all():
+        kpi[div.locator('dt').inner_text()] = div.locator('dd').inner_text()
+    res['kpi'] = kpi
+    res['integrity'] = pg.locator('#integrityStrip li b').all_inner_texts()
+    first_before = pg.locator('#rows tr').first.inner_text()
+    top_before = pg.locator('#sandboxTop10 li').first.inner_text()
+    stats_before = pg.locator('#sandboxStats').inner_text()
+    pg.evaluate("var el=document.querySelector('#slopeSlider'); el.value='0.30'; el.dispatchEvent(new Event('input',{bubbles:true}));")
+    top_after = pg.locator('#sandboxTop10 li').first.inner_text()
+    stats_after = pg.locator('#sandboxStats').inner_text()
+    first_after_slope = pg.locator('#rows tr').first.inner_text()
+    pg.evaluate("var el=document.querySelector('#allocSlider'); el.value='0'; el.dispatchEvent(new Event('input',{bubbles:true}));")
+    stats_alloc = pg.locator('#sandboxStats').inner_text()
+    first_after_alloc = pg.locator('#rows tr').first.inner_text()
+    res['sandbox'] = {'top_before': top_before, 'top_after': top_after, 'stats_before': stats_before, 'stats_after': stats_after, 'stats_alloc': stats_alloc, 'board_first_before': first_before, 'board_first_after_slope': first_after_slope, 'board_first_after_alloc': first_after_alloc}
+    pg.locator('#verdict').select_option('FARM')
+    pg.wait_for_function("document.querySelectorAll('#rows tr').length === 104")
+    verdicts = pg.locator('#rows tr .verdict').all_inner_texts()
+    res['verdict_filter'] = {'rows': pg.locator('#rows tr').count(), 'count_text': pg.locator('#count').inner_text(), 'all_farm': all(v == 'FARM' for v in verdicts), 'n_spans': len(verdicts)}
+    b.close()
+print(json.dumps(res))
+`;
+{
+  const pyFile = join(scratch, 'v20.py');
+  writeFileSync(pyFile, V20_PY);
+  const medOdds = DATA.median_odds.toFixed(3);
+  const r = spawnSync('python3', [pyFile, OUT, medOdds], { encoding: 'utf8', timeout: 120_000 });
+  if (r.status !== 0) {
+    fail('V20 KPI / sandbox DOM', `playwright script exit ${r.status}: ${(r.stderr || '').trim().split('\n').slice(-3).join(' | ') || r.stdout}`);
+  } else {
+    let v20;
+    try { v20 = JSON.parse(r.stdout.trim().split('\n').pop()); } catch { v20 = null; }
+    if (!v20) fail('V20 KPI / sandbox DOM', 'playwright output was not JSON: ' + r.stdout.slice(0, 200));
+    else {
+      const problems = [];
+      const k = v20.kpi || {};
+      if (k['Snapshot total'] !== '758') problems.push(`KPI Snapshot total "${k['Snapshot total']}"`);
+      if (!String(k.Ranked || '').startsWith('198')) problems.push(`KPI Ranked "${k.Ranked}"`);
+      if (k['Median odds'] !== medOdds) problems.push(`KPI Median odds "${k['Median odds']}" vs payload ${medOdds}`);
+      if (!String(k.Verdicts || '').includes('FARM 104')) problems.push(`KPI Verdicts "${k.Verdicts}"`);
+      if (!Array.isArray(v20.integrity) || v20.integrity.length !== 5 || !v20.integrity.every((s) => s === 'PASS')) {
+        problems.push(`integrity strip ${JSON.stringify(v20.integrity)}`);
+      }
+      const sb = v20.sandbox || {};
+      if (sb.stats_after === sb.stats_before) problems.push('sandbox: moving slope 0.463→0.30 did not move the stats text');
+      if (sb.top_after === sb.top_before && sb.stats_after === sb.stats_before) problems.push('sandbox: top-10 and stats both unchanged at slope 0.30');
+      if (sb.stats_alloc === sb.stats_after) problems.push('sandbox: moving allocation to 0.001% did not move the stats text');
+      if (sb.board_first_after_slope !== sb.board_first_before) problems.push('sandbox: slope move changed the locked board first row');
+      if (sb.board_first_after_alloc !== sb.board_first_before) problems.push('sandbox: allocation move changed the locked board first row');
+      const vf = v20.verdict_filter || {};
+      if (vf.rows !== 104) problems.push(`verdict filter FARM: ${vf.rows} rows, expect 104`);
+      if (!String(vf.count_text || '').includes('104')) problems.push(`verdict filter count "${vf.count_text}"`);
+      if (!vf.all_farm) problems.push(`verdict filter: not all visible rows are FARM (${vf.n_spans} verdict spans)`);
+      record('V20 KPI / sandbox DOM', problems.length === 0,
+        `KPI Snapshot total ${k['Snapshot total']}, Ranked "${k.Ranked}", Median odds ${k['Median odds']}, Verdicts "${k.Verdicts}"; integrity ${JSON.stringify(v20.integrity)}; sandbox top-10 first "${(sb.top_before || '').slice(0, 60)}" → "${(sb.top_after || '').slice(0, 60)}", stats moved on slope ${sb.stats_after !== sb.stats_before} and on allocation ${sb.stats_alloc !== sb.stats_after}, locked board first row unchanged ${sb.board_first_after_slope === sb.board_first_before && sb.board_first_after_alloc === sb.board_first_before}; verdict filter FARM ${vf.rows} rows, count "${vf.count_text}", all FARM ${vf.all_farm}; problems: ${problems.join(' | ') || 'none'}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- V21 (LOO / split / coverage recompute)
+{
+  const { live, big, X, y } = liveDesignV(snapshot);
+  const n = live.length;
+  const looErr = [];
+  for (let h = 0; h < n; h++) {
+    const bh = olsV(X.filter((_, i) => i !== h), y.filter((_, i) => i !== h));
+    looErr.push(Math.abs(y[h] - dotV(X[h], bh)));
+  }
+  const looMedian = median(looErr);
+  const looRmse = Math.sqrt(looErr.reduce((s, e) => s + e * e, 0) / n);
+  const looCoverage = looErr.filter((e) => e <= Z_90 * looRmse).length / n;
+  const { train, test } = splitIndicesV(n);
+  const bSplit = olsV(train.map((i) => X[i]), train.map((i) => y[i]));
+  const splitErr = test.map((i) => Math.abs(y[i] - dotV(X[i], bSplit)));
+  const splitMedian = median(splitErr);
+  const splitCoverage = splitErr.filter((e) => e <= Z_90 * looRmse).length / test.length;
+  const problems = [];
+  if (Math.abs(looMedian - DATA.fit.loo_median) > 0.0005) problems.push(`LOO median ${looMedian.toFixed(4)} vs payload ${DATA.fit.loo_median.toFixed(4)}`);
+  if (Math.abs(looRmse - DATA.fit.loo_rmse) > 0.0005) problems.push(`LOO RMSE ${looRmse.toFixed(4)} vs payload ${DATA.fit.loo_rmse.toFixed(4)}`);
+  if (looCoverage !== DATA.fit.loo_coverage) problems.push(`LOO coverage ${looCoverage} vs payload ${DATA.fit.loo_coverage}`);
+  if (Math.abs(splitMedian - DATA.fit.split_median) > 0.0005) problems.push(`split median ${splitMedian.toFixed(4)} vs payload ${DATA.fit.split_median.toFixed(4)}`);
+  if (splitCoverage !== DATA.fit.split_coverage) problems.push(`split coverage ${splitCoverage} vs payload ${DATA.fit.split_coverage}`);
+  record('V21 LOO / split / coverage recompute', problems.length === 0,
+    `LOO median ${looMedian.toFixed(4)} RMSE ${looRmse.toFixed(4)} coverage ${(looCoverage * 100).toFixed(1)}%; split (seed ${SPLIT_SEED}, test = first 38) median ${splitMedian.toFixed(4)} coverage ${(splitCoverage * 100).toFixed(1)}%; problems: ${problems.join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- S1 (info): radar-3 constants recompute
 {
   const livePos = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0);
   const overall = median(livePos.map((p) => p.mcap_usd / p.tvl_usd));
-  const byCat = {};
-  for (const p of livePos) (byCat[p.category] ??= []).push(p.mcap_usd / p.tvl_usd);
-  const yieldMed = median(byCat.Yield ?? []);
   const modelText = readFileSync(join(ROOT, 'lib', 'model.ts'), 'utf8');
-  const constantsMatchD1r = ['fallback_multiple: 0.214', 'Lending: 0.132', 'Yield: 0.191', 'RWA: 0.275', 'Dexs: 0.342', 'Bridge: 0.557', "'Basis Trading': 0.6", "'Canonical Bridge': 0.6"]
+  const constantsMatchD8 = ['intercept: 8.028969', 'slope: 0.463147',
+    "'Basis Trading': 1.070305", 'Bridge: -0.111419', 'CEX: 0.867641',
+    "'Canonical Bridge': 0.754849", 'Dexs: 0.064547', 'Lending: -0.631826',
+    "'Liquid Staking': -0.964243", 'RWA: 0.179798', 'Yield: -0.786214']
     .every((s) => modelText.includes(s));
-  const negMcap = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd < 0).map((p) => `${p.slug} (${p.mcap_usd})`);
-  const zeroMcap = snapshot.protocols.filter((p) => p.mcap_usd === 0).length;
-  console.log(`INFO S1 spec-analysis recompute — live positive-mcap count ${livePos.length} (spec D1 said 129, D1r says 128); overall median mcap/TVL ${overall.toFixed(3)} (D1 0.205, D1r 0.214); Yield median ${yieldMed.toFixed(3)} n=${(byCat.Yield ?? []).length} (D1 0.180 n=10, D1r 0.191 n=9); cause: snapshot carries ${negMcap.join(', ') || 'no negative mcap'} and ${zeroMcap} zero-mcap rows — the spec's D1 counts match a non-zero (mcap != 0) filter, which admits the -1 sentinel; implemented constants match the spec D1r table exactly: ${constantsMatchD1r ? 'yes' : 'NO'}`);
-  console.log('INFO S1 note — the D1r table is the normative model definition (strict mcap_usd > 0 filter); D1 is retained in the spec as history. See verification/report.md.');
+  const oddsMatchD9 = ['intercept: -3.040781', 'age: 0.446892', 'growth: -3.061039', 'peer: 1.329665']
+    .every((s) => modelText.includes(s));
+  console.log(`INFO S1 radar-3 constants — live positive-mcap count ${livePos.length} (D8: 128); overall median mcap/TVL ${overall.toFixed(3)} (D1r fallback 0.214); fitted constants in lib/model.ts match the D8 table: ${constantsMatchD8 ? 'yes' : 'NO'}; odds constants match the D9 table: ${oddsMatchD9 ? 'yes' : 'NO'}.`);
+  console.log('INFO S1 note — the D8/D9 quoted (6-dp) constants are normative; full-precision refits differ by <0.001% on individual values (worked example +$123, rank-198 +$8 vs the spec prose, which was computed with full-precision betas). See entry/BUILD.md radar-3 deviations.');
 }
 
 // ---------------------------------------------------------------- summary
