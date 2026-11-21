@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/token-radar-01/hyde1990/token-radar-01-entry/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/hyde1990/token-radar-01-entry/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-Token Launch Radar: ranks 198 DefiLlama protocols with no token by implied launch value — all 40 watchlist protocols covered, top-ranked Steakhouse Financial at $345,547,444 — and renders the board as a static offline dashboard with per-protocol detail, filters, and concrete farm plans with costs and times.
+Token Launch Radar: ranks 198 DefiLlama protocols with no token by fitted implied launch value — a pooled log-log OLS fit (LOO median |ln err| 1.29, R² 0.25: honest about uncertainty, not precise) — with all 40 watchlist protocols covered. Rank 1 by implied value is Steakhouse Financial at $184,538,021; rank 1 by expected value is BitFi Basis at $35,830,169 (different rank-1s — implied value is not expected value). Every row carries launch odds and expected value, P10–P90 and rank ranges from a deterministic B=200 bootstrap, and a farm verdict (FARM 104 / THIN 80 / SKIP 14), backed by a 758-protocol ledger. The board renders as a static offline dashboard (59,690 B) with a KPI/integrity strip, a sandbox, per-protocol detail, filters, and concrete farm plans with costs and times.
 
 ## Run it
 
