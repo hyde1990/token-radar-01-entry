@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar — pre-token protocols ranked by implied value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark" aria-hidden="true"></span><span class="brand-name">Token Radar</span></div>
+  <p class="top-meta"><span id="asof">Snapshot —</span><span>Model radar-2</span><span>Offline — no network</span></p>
+</header>
+<main>
+  <section class="lede">
+    <div>
+      <h1>Which pre-token launches would be worth the most?</h1>
+      <p id="lede-text">Every protocol below records no token. The radar ranks them by an implied
+      value computed from the snapshot alone — TVL, category, seven-day growth and age —
+      and gives each one a farm plan with a cost and a time. Implied value is a model,
+      not a promise and not a price.</p>
+      <p class="formula" id="formula"></p>
+    </div>
+    <dl class="facts">
+      <div><dt>Watchlist covered</dt><dd id="fact-watch">—</dd></div>
+      <div><dt>Pre-token rows ranked</dt><dd id="fact-board">—</dd></div>
+      <div><dt>Early rows below the floor</dt><dd id="fact-early">—</dd></div>
+      <div><dt>Live-token protocols set aside</dt><dd id="fact-live">—</dd></div>
+    </dl>
+  </section>
+
+  <section class="controls" aria-label="Filter the board">
+    <div class="field"><label for="q">Search</label>
+      <input type="search" id="q" placeholder="Name, slug, category or chain" autocomplete="off"></div>
+    <div class="field"><label for="category">Category</label><select id="category"></select></div>
+    <div class="field"><label for="chain">Chain</label><select id="chain"></select></div>
+    <div class="field"><label for="minTvl">Min TVL ($M)</label>
+      <input type="number" id="minTvl" min="0" step="1" placeholder="0"></div>
+    <label class="check"><input type="checkbox" id="watchOnly"> Watchlist only</label>
+    <span class="count" id="count" aria-live="polite"></span>
+    <button type="button" class="button" id="clear">Clear filters</button>
+  </section>
+
+  <section class="panel" aria-label="Ranked board">
+    <div class="table-wrap">
+      <table id="board">
+        <caption>Pre-token protocols, strongest implied value first. Select a row for its model breakdown and farm plan.</caption>
+        <thead><tr>
+          <th scope="col"><button type="button" data-sort="rank">Rank</button></th>
+          <th scope="col"><button type="button" data-sort="name">Protocol</button></th>
+          <th scope="col"><button type="button" data-sort="category">Category</button></th>
+          <th scope="col"><button type="button" data-sort="tvl">TVL</button></th>
+          <th scope="col"><button type="button" data-sort="growth">7d</button></th>
+          <th scope="col"><button type="button" data-sort="age">Age</button></th>
+          <th scope="col"><button type="button" data-sort="implied">Implied value</button></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="empty" hidden>No protocol matches that filter. Clear the search or pick another category to see the board again.</p>
+  </section>
+
+  <section class="panel live" aria-label="Live-token protocols">
+    <div class="live-head">
+      <h2>Already trades — market value, not an implied value</h2>
+      <p>These protocols already have a token that trades. Their market cap is the market's
+      own number, shown as it stands. They are set aside here and never mixed into the
+      ranked board above, so a traded token is never mistaken for a coming launch.</p>
+    </div>
+    <div class="table-wrap">
+      <table id="liveTable">
+        <caption>Top 24 live-token protocols by market cap.</caption>
+        <thead><tr>
+          <th scope="col">Protocol</th><th scope="col">Category</th><th scope="col">TVL</th>
+          <th scope="col">7d</th><th scope="col">Market cap</th>
+        </tr></thead>
+        <tbody id="liveRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel method" aria-label="Methodology">
+    <h2>How the implied value is computed</h2>
+    <p>One function scores every row, from the snapshot figures only. No protocol name is
+    special-cased and no row is hand-picked. A protocol is called pre-token only when the
+    snapshot <strong>records no token</strong> for it — no market cap, no CoinGecko id, no
+    symbol. That is what the record proves; it does not prove a token will ever exist.</p>
+    <p class="formula">implied = TVL × category multiple × size multiplier × growth multiplier × maturity multiplier</p>
+    <ul>
+      <li><strong>Category multiple.</strong> The median market-cap-to-TVL ratio of live-token
+        protocols in the same category, with at least 5 live observations; everything else uses
+        the overall median <strong>0.205</strong>. Lending 0.132, Yield 0.180, RWA 0.275, Dexs 0.342,
+        Bridge 0.557, Basis Trading 0.60 (clamped from 0.654). All multiples are clamped to
+        0.08–0.60, so a single outlier protocol can never set a whole category's value.</li>
+      <li><strong>Size multiplier.</strong> (50M ÷ TVL)^0.10, clamped to 0.70–1.30. Small protocols
+        trade at far higher multiples of TVL than giants — the band medians fall from 0.414 at
+        $5–50M to 0.131 at $50–500M, 0.032 at $500M–5B and 0.044 above $5B — but that fall is
+        confounded by category mix, so only this mild dampener is claimed. Implied value still
+        rises with TVL, as TVL^0.9.</li>
+      <li><strong>Growth multiplier.</strong> 1 + 0.60 × clamp(7-day change, −40%, +60%) ÷ 100.
+        The clamp is mandatory: one protocol grew +4,448% in a week, and an uncapped term would
+        hand the board to it. Only 6 protocols exceed +60% and 1 falls below −60%.</li>
+      <li><strong>Maturity multiplier.</strong> 0.70 + 0.30 × min(age in days, 1,095) ÷ 1,095.
+        Long pre-token life is a durability signal — live-token protocols are far older (median
+        928 days) than pre-token ones (513 days) — but youth is already rewarded through growth,
+        so maturity is a gentle premium, not a second reward for youth. Unknown age uses 365 days.</li>
+      <li><strong>Board.</strong> Every pre-token protocol the watchlist rule allows once the
+        $50M floor is lifted — 198 rows: the 40 watchlist protocols plus 158 early ones below
+        the floor. Excluded: exchanges, bridges, liquid staking and restaking wrappers, versioned
+        pools, wrapped or staked assets, and exchange-owned products.</li>
+    </ul>
+    <p class="src" id="src"></p>
+  </section>
+</main>
+<dialog class="detail" id="detail" aria-labelledby="detail-title"></dialog>
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+# Test and local-run artefacts — never shipped in the repo or the dossier.
+# node tests/behaviour.mjs writes its fresh output tree here on every run.
+.test-out/
