@@ -32,11 +32,11 @@ const KIT_SNAPSHOT = '/home/hatch/workspace/makefun/scout-2026-11-21/kits/token-
 const MAIN = join(ROOT, 'main.ts');
 const VENDOR = join(ROOT, 'vendor', 'makefun-board.ts');
 
-// --- spec D1 constants, copied from the spec table (NOT read from lib/model.ts) ---
+// --- spec D1r constants, copied from the spec table (NOT read from lib/model.ts) ---
 const SPEC = {
-  fallback: 0.205,
+  fallback: 0.214,
   multiples: {
-    'Liquid Staking': 0.08, CEX: 0.08, Lending: 0.132, Yield: 0.18,
+    'Liquid Staking': 0.08, CEX: 0.08, Lending: 0.132, Yield: 0.191,
     RWA: 0.275, Dexs: 0.342, Bridge: 0.557, 'Basis Trading': 0.6,
     'Canonical Bridge': 0.6,
   },
@@ -74,7 +74,7 @@ const median = (xs) => {
 };
 const DAY_MS = 86_400_000;
 
-/** Independent radar-2 recompute from one snapshot row (spec D1, written here). */
+/** Independent radar-2 recompute from one snapshot row (spec D1r, written here). */
 function impliedIndependent(p, asOf) {
   const age = p.listed_at === null ? null
     : Math.max(0, Math.floor((Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${p.listed_at}T00:00:00Z`)) / DAY_MS));
@@ -461,12 +461,12 @@ print(json.dumps(res))
   for (const p of livePos) (byCat[p.category] ??= []).push(p.mcap_usd / p.tvl_usd);
   const yieldMed = median(byCat.Yield ?? []);
   const modelText = readFileSync(join(ROOT, 'lib', 'model.ts'), 'utf8');
-  const constantsMatchD1 = ['fallback_multiple: 0.205', 'Lending: 0.132', 'Yield: 0.18', 'RWA: 0.275', 'Dexs: 0.342', 'Bridge: 0.557', "'Basis Trading': 0.6", "'Canonical Bridge': 0.6"]
+  const constantsMatchD1r = ['fallback_multiple: 0.214', 'Lending: 0.132', 'Yield: 0.191', 'RWA: 0.275', 'Dexs: 0.342', 'Bridge: 0.557', "'Basis Trading': 0.6", "'Canonical Bridge': 0.6"]
     .every((s) => modelText.includes(s));
   const negMcap = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd < 0).map((p) => `${p.slug} (${p.mcap_usd})`);
   const zeroMcap = snapshot.protocols.filter((p) => p.mcap_usd === 0).length;
-  console.log(`INFO S1 spec-analysis recompute — live positive-mcap count ${livePos.length} (spec analysis says 129); overall median mcap/TVL ${overall.toFixed(3)} (spec 0.205); Yield median ${yieldMed.toFixed(3)} n=${(byCat.Yield ?? []).length} (spec 0.180 n=10); cause: snapshot carries ${negMcap.join(', ') || 'no negative mcap'} and ${zeroMcap} zero-mcap rows — the spec's counts match a non-zero (mcap != 0) filter, which admits the -1 sentinel; implemented constants match the spec D1 table exactly: ${constantsMatchD1 ? 'yes' : 'NO'}`);
-  console.log('INFO S1 note — the D1 table is the normative model definition; the analysis-section counts do not change any implemented constant or any implied value. See verification/report.md.');
+  console.log(`INFO S1 spec-analysis recompute — live positive-mcap count ${livePos.length} (spec D1 said 129, D1r says 128); overall median mcap/TVL ${overall.toFixed(3)} (D1 0.205, D1r 0.214); Yield median ${yieldMed.toFixed(3)} n=${(byCat.Yield ?? []).length} (D1 0.180 n=10, D1r 0.191 n=9); cause: snapshot carries ${negMcap.join(', ') || 'no negative mcap'} and ${zeroMcap} zero-mcap rows — the spec's D1 counts match a non-zero (mcap != 0) filter, which admits the -1 sentinel; implemented constants match the spec D1r table exactly: ${constantsMatchD1r ? 'yes' : 'NO'}`);
+  console.log('INFO S1 note — the D1r table is the normative model definition (strict mcap_usd > 0 filter); D1 is retained in the spec as history. See verification/report.md.');
 }
 
 // ---------------------------------------------------------------- summary

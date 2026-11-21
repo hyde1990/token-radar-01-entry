@@ -8,6 +8,10 @@
   var DATA = window.RADAR;
   if (!DATA) return;
 
+  // Distinct values actually present on the board; a hash may name a value
+  // outside these sets (e.g. #category=CEX — CEX is live-only, never board).
+  var boardCats = {}, boardChains = {};
+
   var state = {
     q: '', category: 'all', chain: 'all', watchOnly: false, minTvl: 0,
     sort: 'implied', dir: -1, selected: null
@@ -119,6 +123,18 @@
     });
   }
 
+  // Keep a select in sync even when the requested value is not a board
+  // value: show the requested value as a clearly-marked option instead of
+  // leaving the select on some other category (or on nothing at all).
+  function syncSelectWithUnknown(select, value, known) {
+    var prev = select.querySelector('option[data-unknown]');
+    if (prev) prev.remove();
+    if (value !== 'all' && !known[value]) {
+      select.appendChild(el('option', { value: value, text: value + ' (not on board)', 'data-unknown': 'true' }));
+    }
+    select.value = value;
+  }
+
   function initControls() {
     var cats = {}, chains = {};
     DATA.rows.forEach(function (r) {
@@ -126,6 +142,8 @@
       cats[c] = (cats[c] || 0) + 1;
       (r.chains || []).forEach(function (ch) { chains[ch] = (chains[ch] || 0) + 1; });
     });
+    boardCats = cats;
+    boardChains = chains;
     var catNames = Object.keys(cats).sort();
     var chainNames = Object.keys(chains).sort();
     fillSelect(document.getElementById('category'), catNames, cats, 'All categories');
@@ -136,7 +154,9 @@
     var ch = document.getElementById('chain');
     var min = document.getElementById('minTvl');
     var watch = document.getElementById('watchOnly');
-    q.value = state.q; cat.value = state.category; ch.value = state.chain;
+    q.value = state.q;
+    syncSelectWithUnknown(cat, state.category, boardCats);
+    syncSelectWithUnknown(ch, state.chain, boardChains);
     if (state.minTvl > 0) min.value = String(state.minTvl);
     watch.checked = state.watchOnly;
     q.addEventListener('input', function () { state.q = q.value; writeHash(); renderRows(); });
@@ -146,7 +166,7 @@
     watch.addEventListener('change', function () { state.watchOnly = watch.checked; writeHash(); renderRows(); });
     document.getElementById('clear').addEventListener('click', function () {
       state.q = ''; state.category = 'all'; state.chain = 'all'; state.watchOnly = false; state.minTvl = 0;
-      q.value = ''; cat.value = 'all'; ch.value = 'all'; min.value = ''; watch.checked = false;
+      syncControls();
       writeHash(); renderRows();
     });
     document.querySelectorAll('#board thead button').forEach(function (btn) {
@@ -180,7 +200,7 @@
       },
         el('td', { class: 'num rank', text: String(r.rank) }),
         el('td', null, nameCell),
-        el('td', { text: r.category || 'Other' }),
+        el('td', null, el('span', { class: 'chip', text: r.category || 'Other' })),
         el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
         el('td', { class: 'num ' + growthClass, text: growth }),
         el('td', { class: 'num', text: fmtAge(r.age_days) }),
@@ -192,7 +212,17 @@
       tbody.appendChild(tr);
     });
     document.getElementById('count').textContent = list.length + ' rows shown';
-    document.getElementById('empty').hidden = list.length > 0;
+    var empty = document.getElementById('empty');
+    empty.hidden = list.length > 0;
+    if (list.length === 0) {
+      if (state.category !== 'all' && !boardCats[state.category]) {
+        empty.textContent = 'No protocol matches that filter. “' + state.category + '” is not a category on this board — clear the search or pick another category to see the board again.';
+      } else if (state.chain !== 'all' && !boardChains[state.chain]) {
+        empty.textContent = 'No protocol matches that filter. “' + state.chain + '” is not a chain on this board — clear the search or pick another chain to see the board again.';
+      } else {
+        empty.textContent = 'No protocol matches that filter. Clear the search or pick another category to see the board again.';
+      }
+    }
     document.querySelectorAll('#board thead button').forEach(function (btn) {
       if (btn.getAttribute('data-sort') === state.sort) {
         btn.setAttribute('aria-sort', state.dir < 0 ? 'descending' : 'ascending');
@@ -210,7 +240,7 @@
           el('b', { text: r.name }),
           el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + (r.chains && r.chains.length ? r.chains.slice(0, 2).join(', ') : 'an unnamed chain') })
         )),
-        el('td', { text: r.category || 'Other' }),
+        el('td', null, el('span', { class: 'chip', text: r.category || 'Other' })),
         el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
         el('td', { class: 'num ' + (r.change_7d !== null && r.change_7d >= 0 ? 'pos' : 'neg'), text: fmtPct(r.change_7d) }),
         el('td', { class: 'num', text: fmtUsd(r.mcap_usd) })
@@ -225,7 +255,15 @@
 
   function openDetail(slug) {
     var row = bySlug(slug);
-    if (!row) return;
+    if (!row) {
+      // Unknown #p= slug: never open a half dialog and never leave a stale
+      // selection behind — drop it from the state and the hash so the page
+      // stays exactly as it was (board visible, filters unchanged).
+      if (state.selected) { state.selected = null; writeHash(); }
+      if (dialog.open) dialog.close();
+      renderRows();
+      return;
+    }
     state.selected = slug;
     writeHash();
     dialog.textContent = '';
@@ -249,9 +287,10 @@
         el('div', null, el('span', { text: 'Size multiplier' }), el('b', { text: String(m.size_multiplier) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { text: String(m.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier (age ' + fmtAge(row.age_days) + ')' }), el('b', { text: String(m.maturity_multiplier) })),
-        el('div', null, el('span', { text: 'Implied value' }), el('b', { text: fmtUsd(row.implied_value_usd) }))
+        el('div', null, el('span', { text: 'Implied value' }), el('b', { text: money.format(row.implied_value_usd) }))
       ),
-      el('p', { text: 'Category multiple ' + m.base_multiple + ' is the live-token median for ' + (row.category || 'Other') + ' (or the overall median 0.205 where the category has too few live comparators). Size multiplier ' + m.size_multiplier + ' damps giant TVLs. ' + growthWord + ' Maturity multiplier ' + m.maturity_multiplier + ' rewards ' + fmtAge(row.age_days) + ' of life with no token on record. Model radar-2; the same function scores every row.' })
+      el('p', { class: 'words-eq', text: 'TVL ' + fmtUsd(row.tvl_usd) + ' × ' + m.base_multiple + ' (' + (row.category || 'Other') + ' multiple) × ' + m.size_multiplier + ' (size) × ' + m.growth_multiplier + ' (growth) × ' + m.maturity_multiplier + ' (maturity) = ' + money.format(row.implied_value_usd) }),
+      el('p', { text: 'Category multiple ' + m.base_multiple + ' is the live-token median for ' + (row.category || 'Other') + ' (or the overall median 0.214 where the category has too few live comparators). Size multiplier ' + m.size_multiplier + ' damps giant TVLs. ' + growthWord + ' Maturity multiplier ' + m.maturity_multiplier + ' rewards ' + fmtAge(row.age_days) + ' of life with no token on record. Model radar-2; the same function scores every row.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan — 7 steps' }),
@@ -289,7 +328,9 @@
     var ch = document.getElementById('chain');
     var min = document.getElementById('minTvl');
     var watch = document.getElementById('watchOnly');
-    q.value = state.q; cat.value = state.category; ch.value = state.chain;
+    q.value = state.q;
+    syncSelectWithUnknown(cat, state.category, boardCats);
+    syncSelectWithUnknown(ch, state.chain, boardChains);
     min.value = state.minTvl > 0 ? String(state.minTvl) : '';
     watch.checked = state.watchOnly;
   }

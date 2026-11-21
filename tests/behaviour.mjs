@@ -17,10 +17,11 @@ function check(label, ok, detail = '') {
   if (!ok) failures++;
 }
 
-execFileSync('node', [join(ROOT, 'main.ts'), '--input', SNAP], {
+const run = execFileSync('node', [join(ROOT, 'main.ts'), '--input', SNAP], {
   env: { ...process.env, MAKEFUN_OUTPUT_DIR: OUT },
   stdio: 'pipe',
 });
+const runStdout = run.toString('utf8');
 
 const board = JSON.parse(readFileSync(join(OUT, 'board.json'), 'utf8'));
 const rows = board.rows;
@@ -32,6 +33,7 @@ check('ranks are exactly 1..198', rows.every((r, i) => r.rank === i + 1));
 check('implied non-increasing', rows.every((r, i) => i === 0 || r.implied_value_usd <= rows[i - 1].implied_value_usd));
 check('implied not all identical', new Set(rows.map((r) => r.implied_value_usd)).size > 1);
 check('watchlist 40/40 covered', snap.watchlist.every((s) => rows.some((r) => r.slug === s)));
+check('no fallback farm plans (18 families cover the board)', runStdout.includes('0 fallback farm plans'), runStdout.trim().split('\n')[0] ?? '');
 check('every row 7 farm steps', rows.every((r) => r.farm_steps.length === 7));
 check('every step 20-600 chars with Cost: and Time:', rows.every((r) =>
   r.farm_steps.every((s) => s.length >= 20 && s.length <= 600 && s.includes('Cost:') && s.includes('Time:'))));
@@ -42,8 +44,16 @@ check('model breakdown present on every row', rows.every((r) =>
   && typeof r.model.growth_multiplier === 'number' && typeof r.model.maturity_multiplier === 'number'));
 check('no live-token slug in board', rows.every((r) => r.mcap_usd === null && r.gecko_id === null && r.symbol === null));
 
-// Worked example from the spec: median watchlist protocol (TVL $152.8M, RWA,
-// growth -3.29%, age 512d) scores ~$30.9M. Recompute the formula directly here.
+check('D1r constants in the board: Yield 0.191, fallback 0.214', (() => {
+  const y = rows.find((r) => r.category === 'Yield');
+  const f = rows.find((r) => r.category === 'Risk Curators');
+  return y && y.model.base_multiple === 0.191 && f && f.model.base_multiple === 0.214;
+})(), `Yield ${rows.find((r) => r.category === 'Yield')?.model.base_multiple}, Risk Curators ${rows.find((r) => r.category === 'Risk Curators')?.model.base_multiple}`);
+
+// Worked example from the spec (D1r — unchanged from D1: the median watchlist
+// protocol is RWA, whose multiple did not move): median watchlist protocol
+// (TVL $152.8M, RWA, growth -3.29%, age 512d) scores ~$30.9M. Recompute the
+// formula directly here.
 const size = Math.min(1.3, Math.max(0.7, (50_000_000 / 152_800_000) ** 0.1));
 const growth = 1 + 0.6 * (-3.29 / 100);
 const mat = 0.7 + 0.3 * (512 / 1095);

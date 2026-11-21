@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/token-radar-01/hyde1990/token-radar-01-entry/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/hyde1990/token-radar-01-entry/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-Token Launch Radar: ranks 198 DefiLlama protocols with no token by implied launch value — all 40 watchlist protocols covered, top-ranked Steakhouse Financial at $331,015,075 — and renders the board as a static offline dashboard with per-protocol detail, filters, and concrete farm plans with costs and times.
+Token Launch Radar: ranks 198 DefiLlama protocols with no token by implied launch value — all 40 watchlist protocols covered, top-ranked Steakhouse Financial at $345,547,444 — and renders the board as a static offline dashboard with per-protocol detail, filters, and concrete farm plans with costs and times.
 
 ## Run it
 

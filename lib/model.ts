@@ -6,9 +6,10 @@
 // scores every row, and the constants are stated here with their evidence.
 //
 // The evidence (medians of mcap/TVL among live-token protocols with a positive
-// market cap, computed from the sealed snapshot, as_of 2026-11-14):
-//   overall median 0.205 (n = 129). By category, n >= 5 only:
-//   Lending 0.132 (n = 15), Yield 0.180 (n = 10), RWA 0.275 (n = 9),
+// market cap, computed from the sealed snapshot, as_of 2026-11-14, strict filter
+// mcap_usd > 0 — spec D1r; the -1 sentinel and the 15 zero-mcap rows are excluded):
+//   overall median 0.214 (n = 128). By category, n >= 5 only:
+//   Lending 0.132 (n = 15), Yield 0.191 (n = 9), RWA 0.275 (n = 9),
 //   Dexs 0.342 (n = 11), Bridge 0.557 (n = 6), Basis Trading 0.654 (n = 7),
 //   Canonical Bridge 0.746 (n = 8), CEX 0.075 (n = 9), Liquid Staking 0.041 (n = 9).
 // Categories with fewer than 5 live observations get no multiple of their own:
@@ -17,7 +18,7 @@
 // clamped to [0.08, 0.60], so the category spread is 7.5x, not the raw 18x.
 //
 //   age_days        = days(as_of - listed_at); null listed_at -> 365
-//   m_cat           = category multiple (table below; fallback 0.205)
+//   m_cat           = category multiple (table below; fallback 0.214)
 //   size_mult       = clamp((50_000_000 / tvl_usd) ^ 0.10, 0.70, 1.30)
 //   growth_pct      = clamp(change_7d ?? 0, -40, +60)
 //   growth_mult     = 1 + 0.60 * growth_pct / 100
@@ -73,7 +74,7 @@ export interface ModelConstants {
 }
 
 export const MODEL: ModelConstants = {
-  fallback_multiple: 0.205,
+  fallback_multiple: 0.214,
   multiple_floor: 0.08,
   multiple_cap: 0.6,
   size_reference_usd: 50_000_000,
@@ -95,13 +96,13 @@ export const MODEL_VERSION = 'radar-2';
 export const LIVE_ROWS = 24;
 
 /** Category multiples: median mcap/TVL among live-token protocols with a
- *  positive market cap, n >= 5, clamped to [0.08, 0.60]. Anything not listed
- *  here falls back to the overall median 0.205. */
+ *  positive market cap (strict mcap_usd > 0, spec D1r), n >= 5, clamped to
+ *  [0.08, 0.60]. Anything not listed here falls back to the overall median 0.214. */
 export const CATEGORY_MULTIPLES: Readonly<Record<string, number>> = {
   'Liquid Staking': 0.08, // raw median 0.041, clamped; moot on the board (excluded)
   CEX: 0.08, // raw median 0.075, clamped; moot on the board (excluded)
   Lending: 0.132,
-  Yield: 0.18,
+  Yield: 0.191,
   RWA: 0.275,
   Dexs: 0.342,
   Bridge: 0.557, // moot on the board (excluded)
@@ -450,6 +451,44 @@ const FAMILIES: Family[] = [
     second: (n, _c, ch) => `Vote on one live proposal of ${n} on ${ch} with the position, then delegate the vote to a named delegate for the next proposal`,
     weekly: (n, ch) => `Vote or transact once on ${n} on ${ch} and record the proposal or transaction`,
   },
+  {
+    id: 'prediction-market',
+    core: (n, c, ch) => `Buy $${c} of outcome shares on one open market of ${n} on ${ch} and keep the position until the market resolves`,
+    second: (n, c, ch) => `Provide liquidity from part of the same $${c} to ${n}'s market-making pool on ${ch} so the position earns trading fees while the market is open`,
+    weekly: (n, ch) => `Place one small trade on a market of ${n} on ${ch} that resolves within the next two weeks and record the outcome`,
+  },
+  {
+    id: 'cedefi',
+    core: (n, c, ch) => `Deposit $${c} of USDC into a ${n} CeDeFi strategy vault on ${ch} and keep the vault shares`,
+    second: (n, c, ch) => `Allocate part of the same $${c} to a second, different strategy of ${n} on ${ch} so the wallet holds two strategies at once`,
+    weekly: (n, ch) => `Check the strategy allocation and yield on ${n} on ${ch} and move a small amount between strategies if the mix changed`,
+  },
+  {
+    id: 'anchor-btc',
+    core: (n, c, ch) => `Lock $${c} of BTC through ${n} on ${ch} and mint its anchored BTC asset, then hold the minted asset`,
+    second: (n, _c, ch, o) => o
+      ? `Move part of the minted anchored BTC through ${n} from ${ch} to ${o} so the position spans two chains`
+      : `Deposit part of the minted anchored BTC into a second vault of ${n} on ${ch}`,
+    weekly: (n, ch) => `Check the yield accrued on the anchored BTC asset of ${n} on ${ch} and compound it back into the position`,
+  },
+  {
+    id: 'decentralized-btc',
+    core: (n, c, ch) => `Lock $${c} of BTC through ${n} on ${ch} and mint its decentralized BTC, holding the minted BTC`,
+    second: (n, _c, ch) => `Supply the minted decentralized BTC from ${n} to a lending market on ${ch} and keep the supply position open`,
+    weekly: (n, ch) => `Check the peg and the redemption queue of the decentralized BTC on ${n} on ${ch} and redeem a small amount to test the redemption path`,
+  },
+  {
+    id: 'otc',
+    core: (n, c, ch) => `Place an OTC order for $${c} of USDC through ${n} on ${ch} and settle it through the protocol's escrow, keeping the settlement receipt`,
+    second: (n, _c, ch) => `Place a second OTC order through ${n} on ${ch} in the opposite direction, or with a different asset, so the wallet shows two settled trades`,
+    weekly: (n, ch) => `Check the open OTC quotes on ${n} on ${ch} and settle one small trade through the escrow`,
+  },
+  {
+    id: 'crypto-card',
+    core: (n, c, ch) => `Top up the ${n} card with $${c} of USDC on ${ch} and spend it on one real purchase, keeping the receipt`,
+    second: (n, _c, ch) => `Set up a recurring top-up for the ${n} card on ${ch} for a regular bill so the card shows repeat spending`,
+    weekly: (n, ch) => `Top up the ${n} card by a small amount on ${ch} and make one purchase with it`,
+  },
 ];
 
 /** The generic fallback family, used only when no family matches a category. */
@@ -475,6 +514,12 @@ export function familyOf(category: string | null): Family {
   if (has('stable')) return FAMILIES[8]!;
   if (has('insurance')) return FAMILIES[9]!;
   if (has('payment')) return FAMILIES[10]!;
+  if (has('prediction')) return FAMILIES[12]!;
+  if (has('cedefi')) return FAMILIES[13]!;
+  if (has('anchor btc')) return FAMILIES[14]!;
+  if (has('decentralized btc')) return FAMILIES[15]!;
+  if (has('otc')) return FAMILIES[16]!;
+  if (has('card')) return FAMILIES[17]!;
   if (has('chain', 'governance')) return FAMILIES[11]!;
   return FALLBACK_FAMILY;
 }
