@@ -813,14 +813,14 @@ disentuh: `dashboard/app.js`, `BUILD.md` (bagian ini + 3 hitungan suite),
   (Risk Curators, 34 rows). Loop titik-tetap F1: 5 siklus, TIDAK
   konvergen eksak — osilasi ±~600 B karena ukuran PNG bergantung pada
   digit angka strip yang dirender. Dipakai siklus 4 (terbaik):
-  strip di PNG 958.514 B vs dossier hasil rebuild 958.322 B (selisih
-  192 B / 0,02%, stale). Lihat build-log-radar5.md; ini temuan terbuka
+  strip di PNG 958.514 B vs dossier hasil rebuild 949.306 B (selisih
+  9.208 B / 0,97%, stale). Lihat build-log-radar5.md; ini temuan terbuka
   untuk verifier/parent, bukan klaim konvergen.
 - **T6 suites (state final):** behaviour 46/46, verify 25/25
   (V4/V10/V16/V17/V23/V24/V26 diperbarui untuk ranking EV; V16 mengunci
   EV top-10 + total + Brier; V26 DOM evidence + EV rank-1), hash
   edge-case 10/10, double-run `diff -r` bersih (V1, dua run segar dari
   state repo yang sama). Board hash `04d04c8a…` (516.068 B); dossier
-  958.322 B, sha `0d16ce70…`; runtime ~1,0 dtk/run.
+  949.306 B, sha `3e1d86ce…`; runtime ~1,0 dtk/run.
 - **Tidak dilakukan (di luar Fase B):** tidak ada push/merge ke main,
   tidak ada bundle/check-submit/submit, tidak ada wallet baru.
