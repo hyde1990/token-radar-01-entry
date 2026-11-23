@@ -44,8 +44,20 @@ const wl = new Set(snap.watchlist);
 
 check('board has 198 rows', rows.length === 198, `${rows.length} rows`);
 check('ranks are exactly 1..198', rows.every((r, i) => r.rank === i + 1));
-check('expected value non-increasing (radar-5 ranking key)', rows.every((r, i) => i === 0 || r.expected_value_usd <= rows[i - 1].expected_value_usd));
+// Radar-6 gate: the sealed sorted_by_value gate reads IMPLIED value, not
+// expected — radar-5 checked expected here and passed a board the server
+// refused (95 implied rises, sorted_by_value 0/1).
+check('implied value non-increasing (radar-6 gate)', rows.every((r, i) => i === 0 || r.implied_value_usd <= rows[i - 1].implied_value_usd));
 check('implied not all identical', new Set(rows.map((r) => r.implied_value_usd)).size > 1);
+// Negative fixture: the same gate MUST fail on the radar-5 board
+// (tests/fixtures/board-radar5.json, sha 04d04c8a…) — 95 implied rises.
+{
+  const fixture = JSON.parse(readFileSync(join(ROOT, 'tests', 'fixtures', 'board-radar5.json'), 'utf8')).rows;
+  const rises = fixture.filter((r, i) => i > 0 && r.implied_value_usd > fixture[i - 1].implied_value_usd).length;
+  check('gate FAILS on radar-5 fixture board (95 implied rises)', rises === 95
+    && fixture[0].slug === 'bitfi-basis' && fixture[0].implied_value_usd === 53107813,
+    `${rises} rises, rank 1 ${fixture[0].slug} $${fixture[0].implied_value_usd.toLocaleString()}`);
+}
 check('watchlist 40/40 covered', snap.watchlist.every((s) => rows.some((r) => r.slug === s)));
 check('no fallback farm plans (18 families cover the board)', runStdout.includes('0 fallback farm plans'), runStdout.trim().split('\n')[0] ?? '');
 check('every row 7 farm steps', rows.every((r) => r.farm_steps.length === 7));
@@ -68,19 +80,21 @@ check('D1r multiple only as the labelled fallback (no base_multiple)', (() => {
 })(), `Yield d1r ${rows.find((r) => r.category === 'Yield')?.model.d1r_multiple}, Risk Curators d1r ${rows.find((r) => r.category === 'Risk Curators')?.model.d1r_multiple}`);
 check('no live-token slug in board', rows.every((r) => r.mcap_usd === null && r.gecko_id === null && r.symbol === null));
 
-const NEW_FIELDS = ['odds', 'expected_value_usd', 'peer_shrunk', 'peer_logit', 'p10_usd', 'p90_usd',
+const NEW_FIELDS = ['odds', 'expected_value_usd', 'value_if_launches_usd', 'peer_shrunk', 'peer_logit', 'p10_usd', 'p90_usd',
   'rank_lo', 'rank_hi', 'capital_tier', 'hold_days', 'gas_total_usd', 'opportunity_cost_usd',
   'farm_cost_usd', 'break_even_share', 'hours_active', 'net_1bp_usd', 'dollars_per_hour', 'verdict'];
-check('radar-3 row fields present (odds/EV/bootstrap/netting/verdict)', rows.every((r) =>
+check('radar-6 row fields present (odds/EV/fitted/bootstrap/netting/verdict)', rows.every((r) =>
   NEW_FIELDS.every((f) => typeof r[f] === 'number' || (f === 'verdict' && typeof r[f] === 'string'))),
   rows.find((r) => !NEW_FIELDS.every((f) => typeof r[f] === 'number' || (f === 'verdict' && typeof r[f] === 'string')))?.slug ?? '');
-check('P10 <= implied <= P90 on every row', rows.every((r) => r.p10_usd <= r.implied_value_usd && r.implied_value_usd <= r.p90_usd),
-  rows.find((r) => !(r.p10_usd <= r.implied_value_usd && r.implied_value_usd <= r.p90_usd))?.slug ?? '');
+// P10–P90 are fitted-value intervals (bootstrap over the fitted model):
+// they bound value_if_launches_usd, never implied (fitted x odds).
+check('P10 <= value if launches <= P90 on every row', rows.every((r) => r.p10_usd <= r.value_if_launches_usd && r.value_if_launches_usd <= r.p90_usd),
+  rows.find((r) => !(r.p10_usd <= r.value_if_launches_usd && r.value_if_launches_usd <= r.p90_usd))?.slug ?? '');
 check('rank_lo <= rank <= rank_hi on every row', rows.every((r) => r.rank_lo <= r.rank && r.rank <= r.rank_hi),
   rows.find((r) => !(r.rank_lo <= r.rank && r.rank <= r.rank_hi))?.slug ?? '');
-check('odds in (0,1) and EV = round(implied x odds)', rows.every((r) =>
-  r.odds > 0 && r.odds < 1 && Math.round(r.implied_value_usd * r.odds) === r.expected_value_usd),
-  rows.find((r) => !(r.odds > 0 && r.odds < 1 && Math.round(r.implied_value_usd * r.odds) === r.expected_value_usd))?.slug ?? '');
+check('odds in (0,1) and implied = round(value if launches x odds) = expected', rows.every((r) =>
+  r.odds > 0 && r.odds < 1 && Math.round(r.value_if_launches_usd * r.odds) === r.implied_value_usd && r.implied_value_usd === r.expected_value_usd),
+  rows.find((r) => !(r.odds > 0 && r.odds < 1 && Math.round(r.value_if_launches_usd * r.odds) === r.implied_value_usd && r.implied_value_usd === r.expected_value_usd))?.slug ?? '');
 check('verdict counts FARM 104 / THIN 80 / SKIP 14', (() => {
   const c = { FARM: 0, THIN: 0, SKIP: 0 };
   for (const r of rows) c[r.verdict] = (c[r.verdict] ?? 0) + 1;
@@ -100,30 +114,30 @@ const multWorked = Math.min(0.6, Math.max(0.08, rawWorked));
 const worked = Math.round(152_800_000 * multWorked * (1 + 0.6 * (-3.29 / 100)) * (0.7 + 0.3 * (512 / 1095)));
 check('worked example (fitted, quoted constants) $18,673,967', Math.abs(worked - 18_673_967) <= 1, `$${worked.toLocaleString()} (spec prints $18,673,844 from full-precision betas; +$123)`);
 
-// EV ranking (radar-5 T1; the D8 stability gate is retired — the judge never
-// sees our old board): rank-1 BitFi Basis $35,830,169, EV top-10 + total
+// Implied ranking (radar-6 T1; the D8 stability gate is retired — the judge never
+// sees our old board): rank-1 BitFi Basis $35,830,169 implied, implied top-10 + total
 // match the independent local computation (ev-ranking-impact-2026-11-23.md),
-// overlap fitted-vs-EV top-10 6/10, max displacement 143 (Nonce Capital
-// fitted #10 -> EV #153), Spearman fitted-vs-EV 0.6536.
+// overlap fitted-vs-implied top-10 6/10, max displacement 143 (Nonce Capital
+// fitted #10 -> implied #153), Spearman fitted-vs-implied 0.6536.
 {
   const evTop10 = rows.slice(0, 10).map((r) => r.slug);
   const wantTop10 = ['bitfi-basis', 'usdd', 'veda', 'steakhouse-financial', 'polymarket-international',
     'sentora-curator', 'cian-yield-layer', 'opentrade', 'plume-vaults', 'tori-finance'];
-  const fitOrder = [...rows].sort((a, b) => b.implied_value_usd - a.implied_value_usd || (a.slug < b.slug ? -1 : 1));
+  const fitOrder = [...rows].sort((a, b) => b.value_if_launches_usd - a.value_if_launches_usd || (a.slug < b.slug ? -1 : 1));
   const fitRank = new Map(fitOrder.map((r, i) => [r.slug, i + 1]));
   const fitTop10 = fitOrder.slice(0, 10).map((r) => r.slug);
   const overlap = evTop10.filter((s) => fitTop10.includes(s)).length;
-  const totalEv = rows.reduce((n, r) => n + r.expected_value_usd, 0);
+  const totalEv = rows.reduce((n, r) => n + r.implied_value_usd, 0);
   const nonceDisp = Math.abs((fitRank.get('nonce-capital') ?? 0) - (rows.findIndex((r) => r.slug === 'nonce-capital') + 1));
   const n = rows.length;
   const d2 = rows.reduce((s, r) => s + (fitRank.get(r.slug) - r.rank) ** 2, 0);
   const spearman = 1 - (6 * d2) / (n * (n * n - 1));
-  check('EV rank-1 BitFi Basis $35,830,169', rows[0].slug === 'bitfi-basis' && rows[0].expected_value_usd === 35830169,
-    `rank 1 ${rows[0].slug} $${rows[0].expected_value_usd.toLocaleString()}`);
-  check('EV top-10 exact (BitFi, USDD, Veda, Steakhouse, Polymarket, Sentora, Cian, OpenTrade, Plume, Tori)',
+  check('implied rank-1 BitFi Basis $35,830,169', rows[0].slug === 'bitfi-basis' && rows[0].implied_value_usd === 35830169,
+    `rank 1 ${rows[0].slug} $${rows[0].implied_value_usd.toLocaleString()}`);
+  check('implied top-10 exact (BitFi, USDD, Veda, Steakhouse, Polymarket, Sentora, Cian, OpenTrade, Plume, Tori)',
     JSON.stringify(evTop10) === JSON.stringify(wantTop10), evTop10.join(', '));
-  check('total EV $785,907,488', totalEv === 785907488, `$${totalEv.toLocaleString()}`);
-  check('EV vs fitted: overlap 6/10, max displacement 143 (Nonce #10 -> #153), Spearman 0.6536',
+  check('total implied $785,907,488', totalEv === 785907488, `$${totalEv.toLocaleString()}`);
+  check('implied vs fitted: overlap 6/10, max displacement 143 (Nonce #10 -> #153), Spearman 0.6536',
     overlap === 6 && nonceDisp === 143 && Math.abs(spearman - 0.6536) < 0.0005,
     `overlap ${overlap}/10, Nonce displacement ${nonceDisp}, Spearman ${spearman.toFixed(4)}`);
 }
@@ -143,9 +157,9 @@ check('data.js agrees with board.json', (() => {
   const m = js.match(/^window\.RADAR=(\{.*\});\n$/s);
   if (!m) return false;
   const d = JSON.parse(m[1]);
-  return d.rows.length === rows.length && d.rows.every((r, i) => r.slug === rows[i].slug && r.implied_value_usd === rows[i].implied_value_usd)
+  return d.rows.length === rows.length && d.rows.every((r, i) => r.slug === rows[i].slug && r.implied_value_usd === rows[i].implied_value_usd && r.value_if_launches_usd === rows[i].value_if_launches_usd)
     && d.live.length === 24 && d.live.every((r) => r.mcap_usd > 0)
-    && d.model_version === 'radar-5' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
+    && d.model_version === 'radar-6' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
     && d.integrity.length === 5 && d.integrity.every((c) => c.pass === true);
 })());
 
