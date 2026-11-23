@@ -102,7 +102,7 @@ integrity.push({
   id: 'odds-recompute',
   label: 'Odds recomputed (D8 gate retired radar-5)',
   pass: true,
-  value: `match to 6 dp (max Δ ${validation.oddsMaxDelta.toExponential(1)}, IRLS ${validation.oddsIters} iters); EV top-10 vs D1r fitted top-10 overlap ${validation.stability.overlap}/10, rank-1 ${validation.stability.rank1}`,
+  value: `match to 6 dp (max Δ ${validation.oddsMaxDelta.toExponential(1)}, IRLS ${validation.oddsIters} iters); overlap vs D1r top-10: ${validation.stability.overlap}/10, rank-1 ${validation.stability.rank1}`,
 });
 if (!validation.ledgerOk) {
   fail('integrity: ledger does not reconcile (ranked + excluded + live != 758)');
@@ -152,11 +152,19 @@ const dossierB = buildDossier(outDir, { text_max_bytes: TEXT_MAX_BYTES, screensh
 if (Buffer.from(dossierA).toString('utf8') !== Buffer.from(dossierB).toString('utf8')) {
   fail('integrity: two dossier rebuilds differ — the dossier is not deterministic');
 }
+// The strip shows the dossier size rounded DOWN to whole KB (decimal,
+// 1 KB = 1000 B) — NOT the exact byte count. Reason (radar-5 F1 fix):
+// the exact byte count oscillates ±~600 B across retake+rebuild cycles
+// because the PNG bytes depend on the digits rendered in the strip
+// itself, so an exact-byte fixed point never settles (5 cycles in the
+// radar-5 build, 2 more in the F1 fix, best residual 192 B). A whole-KB
+// figure is stable across cycles and true: it is the floor of the
+// dossier size of the rebuild that produced this strip.
 integrity.push({
   id: 'dossier-rebuild',
   label: 'Dossier rebuild byte-identical',
   pass: true,
-  value: `identical (2 rebuilds, ${Buffer.from(dossierA).length.toLocaleString()} B)`,
+  value: `identical (2 rebuilds, ${Math.floor(Buffer.from(dossierA).length / 1000)} KB)`,
 });
 
 radar.integrity = integrity;
@@ -168,7 +176,7 @@ writeFileSync(join(outDir, 'dossier.json'), dossierA);
 
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside, ${fallbackRows} fallback farm plans)\n` +
-    `token radar: rank 1 ${board[0]!.slug} $${board[0]!.expected_value_usd.toLocaleString()} expected value (radar-5, implied $${board[0]!.implied_value_usd.toLocaleString()}); EV top-10 vs D1r fitted top-10 overlap ${validation.stability.overlap}/10; verdicts FARM ${radar.verdict_counts.FARM} / THIN ${radar.verdict_counts.THIN} / SKIP ${radar.verdict_counts.SKIP}\n` +
+    `token radar: rank 1 ${board[0]!.slug} $${board[0]!.expected_value_usd.toLocaleString()} expected value (radar-5, implied $${board[0]!.implied_value_usd.toLocaleString()}); overlap vs D1r top-10: ${validation.stability.overlap}/10; verdicts FARM ${radar.verdict_counts.FARM} / THIN ${radar.verdict_counts.THIN} / SKIP ${radar.verdict_counts.SKIP}\n` +
     `token radar: LOO median |ln err| ${radar.fit.loo_median.toFixed(4)}, split ${radar.fit.split_median.toFixed(4)}, R² ${radar.fit.r2.toFixed(4)}; odds AUC ${radar.odds.auc.toFixed(4)}\n` +
     `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, ${join(outDir, 'dashboard')} (${dashboardFiles.length} files), ${join(outDir, 'screenshots')} (${shotFiles.length} images) and ${join(outDir, 'dossier.json')}\n`,
 );

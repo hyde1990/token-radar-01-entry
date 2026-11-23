@@ -24,7 +24,10 @@ const OUT = join(ROOT, '.test-out');
 
 let failures = 0;
 function check(label, ok, detail = '') {
-  console.log(`${ok ? 'PASS' : 'FAIL'} ${label}${detail ? ' — ' + detail : ''}`);
+  // Detail only on FAIL: a passing check must not print a failure message
+  // next to its PASS (radar-5 clean-room minor M2 — T2 printed
+  // "evidence section missing or not above the board" beside PASS).
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${label}${!ok && detail ? ' — ' + detail : ''}`);
   if (!ok) failures++;
 }
 
