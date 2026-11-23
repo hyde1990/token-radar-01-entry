@@ -1,7 +1,7 @@
 // Token Radar, entry program (Node 22, standard library only).
 //
 // Reads the sealed snapshot, scores every board-eligible pre-token protocol
-// with the radar-3 model in lib/model.ts, and writes the ranked board, the
+// with the radar-5 model in lib/model.ts, and writes the ranked board, the
 // dashboard payload, the dashboard and screenshots, and finally the dossier
 // the judge reads. Deterministic: pure functions, fixed sort tiebreaks, fixed
 // key order in JSON, no clocks, no unseeded randomness, directory listings
@@ -11,10 +11,13 @@
 // The build checks itself before shipping (spec D12/D14): the board is built
 // twice in-process and byte-compared; the fitted and odds coefficients are
 // refit from the snapshot and compared to the hardcoded constants at 6
-// decimals; the D8 stability gate is evaluated; the ledger is reconciled;
-// and the dossier is rebuilt twice and byte-compared. Any failed check exits
-// 1 with the reason — there is no silent fallback to D1r under radar-3
-// branding.
+// decimals; the ledger is reconciled; and the dossier is rebuilt twice and
+// byte-compared. Any failed check exits 1 with the reason — there is no
+// silent fallback to D1r under radar-5 branding. The D8 stability gate is
+// RETIRED in radar-5 (spec T1): the board is ranked by expected value, so
+// its top 10 legitimately differs from the D1r fitted top 10; the gate is
+// still computed and reported in the integrity strip, but no longer fails
+// the build.
 //
 // Layout, local and in the grader alike:
 //   node main.ts --input <snapshot.json | directory> [--output <dir>]
@@ -83,7 +86,7 @@ integrity.push({
   value: 'identical (2 builds)',
 });
 if (!validation.fitMatches6dp) {
-  fail(`integrity: refit OLS coefficients differ from the hardcoded D8 constants (max delta ${validation.fitMaxDelta.toExponential(2)}) — refusing to ship radar-4 branding on a mismatched fit`);
+  fail(`integrity: refit OLS coefficients differ from the hardcoded D8 constants (max delta ${validation.fitMaxDelta.toExponential(2)}) — refusing to ship radar-5 branding on a mismatched fit`);
 }
 integrity.push({
   id: 'fit-recompute',
@@ -92,16 +95,14 @@ integrity.push({
   value: `match to 6 dp (max Δ ${validation.fitMaxDelta.toExponential(1)})`,
 });
 if (!validation.oddsMatches6dp) {
-  fail(`integrity: refit odds coefficients differ from the hardcoded D9 constants (max delta ${validation.oddsMaxDelta.toExponential(2)}) — refusing to ship radar-4 branding on a mismatched fit`);
+  fail(`integrity: refit odds coefficients differ from the hardcoded D9 constants (max delta ${validation.oddsMaxDelta.toExponential(2)}) — refusing to ship radar-5 branding on a mismatched fit`);
 }
-if (!validation.stability.pass) {
-  fail(`integrity: D8 stability gate tripped — top-10 overlap ${validation.stability.overlap}/10, rank-1 ${validation.stability.rank1} vs D1r ${validation.stability.rank1D1r} — refusing to lock the ranking`);
-}
+// D8 gate retired in radar-5 (spec T1): reported, never fatal.
 integrity.push({
   id: 'odds-recompute',
-  label: 'Odds recomputed + stability gate',
+  label: 'Odds recomputed (D8 gate retired radar-5)',
   pass: true,
-  value: `match to 6 dp (max Δ ${validation.oddsMaxDelta.toExponential(1)}, IRLS ${validation.oddsIters} iters); gate ${validation.stability.overlap}/10, rank-1 ${validation.stability.rank1}`,
+  value: `match to 6 dp (max Δ ${validation.oddsMaxDelta.toExponential(1)}, IRLS ${validation.oddsIters} iters); EV top-10 vs D1r fitted top-10 overlap ${validation.stability.overlap}/10, rank-1 ${validation.stability.rank1}`,
 });
 if (!validation.ledgerOk) {
   fail('integrity: ledger does not reconcile (ranked + excluded + live != 758)');
@@ -167,7 +168,7 @@ writeFileSync(join(outDir, 'dossier.json'), dossierA);
 
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside, ${fallbackRows} fallback farm plans)\n` +
-    `token radar: rank 1 ${board[0]!.slug} $${board[0]!.implied_value_usd.toLocaleString()} (radar-4 fitted); top-10 overlap vs D1r ${validation.stability.overlap}/10; verdicts FARM ${radar.verdict_counts.FARM} / THIN ${radar.verdict_counts.THIN} / SKIP ${radar.verdict_counts.SKIP}\n` +
+    `token radar: rank 1 ${board[0]!.slug} $${board[0]!.expected_value_usd.toLocaleString()} expected value (radar-5, implied $${board[0]!.implied_value_usd.toLocaleString()}); EV top-10 vs D1r fitted top-10 overlap ${validation.stability.overlap}/10; verdicts FARM ${radar.verdict_counts.FARM} / THIN ${radar.verdict_counts.THIN} / SKIP ${radar.verdict_counts.SKIP}\n` +
     `token radar: LOO median |ln err| ${radar.fit.loo_median.toFixed(4)}, split ${radar.fit.split_median.toFixed(4)}, R² ${radar.fit.r2.toFixed(4)}; odds AUC ${radar.odds.auc.toFixed(4)}\n` +
     `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, ${join(outDir, 'dashboard')} (${dashboardFiles.length} files), ${join(outDir, 'screenshots')} (${shotFiles.length} images) and ${join(outDir, 'dossier.json')}\n`,
 );

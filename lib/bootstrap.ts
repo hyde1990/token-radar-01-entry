@@ -1,11 +1,14 @@
-// Deterministic bootstrap for radar-3 (spec D10).
+// Deterministic bootstrap for radar-5 (spec D10, ranking key updated T1).
 //
 // B = 200 refits of the V1 fitted model. Each refit resamples the 128
 // live-token rows with replacement, refits the 11-parameter OLS (design
 // fixed from the full sample — the nine BIG categories are not re-derived
 // per resample), and predicts the fitted implied value for every board row
 // with growth/maturity held fixed and odds NOT refit. Rows are re-ranked
-// within each refit by predicted implied value (ties: slug ascending).
+// within each refit by predicted EXPECTED value (predicted implied × the
+// row's fixed odds; ties: slug ascending), because the board itself is
+// ranked by expected value since radar-5. P10–P90 stay fitted-implied
+// intervals (the 20th/180th sorted predicted implied values).
 // PRNG is mulberry32, seed 20261122. Quantiles: P10 = index 19, P90 =
 // index 179 of the 200 sorted values (0-based). Rank range = [min, max]
 // rank across the 200 refits.
@@ -26,6 +29,8 @@ export interface BootstrapInput {
   category: string | null;
   growthMult: number;
   maturityMult: number;
+  /** Fixed launch odds: the refit re-ranks by predicted expected value. */
+  odds: number;
 }
 
 export interface BootstrapResult {
@@ -70,9 +75,11 @@ export function bootstrapIntervals(
       const multiple = Math.min(0.6, Math.max(0.08, raw));
       return Math.max(1, Math.round(r.tvl_usd * multiple * r.growthMult * r.maturityMult));
     });
-    const order = preds
+    // Rank by predicted expected value (implied × fixed odds), not implied.
+    const evs = preds.map((v, i) => v * rows[i]!.odds);
+    const order = evs
       .map((v, i) => i)
-      .sort((i, j) => preds[j]! - preds[i]! || (rows[i]!.slug < rows[j]!.slug ? -1 : 1));
+      .sort((i, j) => evs[j]! - evs[i]! || (rows[i]!.slug < rows[j]!.slug ? -1 : 1));
     order.forEach((ri, pos) => {
       values[ri]!.push(preds[ri]!);
       ranks[ri]!.push(pos + 1);

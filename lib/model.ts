@@ -1,4 +1,4 @@
-// Token Radar, model radar-3 (spec D8–D12; D1/D1r retained as the fallback).
+// Token Radar, model radar-5 (spec D8–D12; D1/D1r retained as the fallback).
 //
 // One sealed snapshot in, one ranked board out. The primary model is a pooled
 // log-log OLS fitted to the 128 live-token protocols with a positive market
@@ -7,7 +7,7 @@
 // held-out numbers, the horse race and the bootstrap are computed by this
 // file from the snapshot for validation and reporting, and the verify suite
 // recomputes them independently. D1r (median multiples) stays in the code
-// as the documented fallback and as the stability-gate comparator.
+// as the documented fallback.
 //
 //   fitted:  log_mcap_hat = a + b * ln(tvl_usd) + eff_cat
 //            fitted_multiple_raw = exp(a + (b-1) * ln TVL + eff_cat)
@@ -16,6 +16,14 @@
 //   odds:    logit = c0 + c1 * ln(age) + c2 * growth_c + c3 * peer_logit
 //            expected = implied_fit * odds
 //   growth_mult / maturity_mult are unchanged from D1r.
+//
+// Since radar-5 the board is RANKED BY EXPECTED VALUE (implied × odds),
+// strongest first; implied value stays on every row as the
+// value-if-launches column. The D8 stability gate (top-10 overlap vs D1r)
+// is retired: it measured stability against our own old board, which the
+// judge never sees — see radar-5 spec T1. The bootstrap rank ranges are
+// expected-value ranks (odds held fixed per row across refits); P10–P90
+// stay fitted-implied intervals.
 //
 // Evidence (spec D8/D9, recomputed independently in /tmp/radar3-recompute-b*.mjs
 // before this code was written; every number below was reproduced there):
@@ -94,7 +102,7 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
 };
 
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 /** Live-token rows the dashboard's separate live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -381,6 +389,9 @@ export interface OddsMetrics {
   prior_weight: number;
   live_share: number;
   auc: number;
+  /** Mean (odds − outcome)² over all 758 protocols, outcome "records a
+   *  token" (radar-5 odds review; base-rate climatology is 0.2476). */
+  brier: number;
   mean_live: number;
   mean_pre: number;
 }
@@ -719,7 +730,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     return { p, v, o, expected, net };
   });
   scored.sort(
-    (a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0),
+    (a, b) => b.expected - a.expected || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0),
   );
   return scored.map((s, i) => ({
     rank: i + 1,
@@ -1360,6 +1371,9 @@ export function ablation(
   const { live, big } = liveDesign(snapshot);
   const baseRank = new Map(board.map((r) => [r.slug, r.rank]));
   const baseTop10 = new Set(board.slice(0, 10).map((r) => r.slug));
+  // Re-ranking is measured on the radar-5 ranking key: expected value
+  // (refit implied × the row's fixed launch odds), not implied alone.
+  const peers = peerStats(snapshot);
   const variants: { key: Exclude<AblationVariant, 'full'>; term: string }[] = [
     { key: 'no-slope', term: 'slope/size' },
     { key: 'no-growth', term: 'growth' },
@@ -1378,11 +1392,11 @@ export function ablation(
     );
     const rescored = snapshot.protocols
       .filter(isBoardEligible)
-      .map((p) => ({
-        slug: p.slug,
-        imp: Math.max(1, Math.round(Math.exp(logImpliedFromBeta(betaFull, p, big, key, snapshot.as_of)))),
-      }))
-      .sort((a, b) => b.imp - a.imp || (a.slug < b.slug ? -1 : 1));
+      .map((p) => {
+        const imp = Math.max(1, Math.round(Math.exp(logImpliedFromBeta(betaFull, p, big, key, snapshot.as_of))));
+        return { slug: p.slug, ev: Math.round(imp * oddsValue(p, snapshot.as_of, peers).odds) };
+      })
+      .sort((a, b) => b.ev - a.ev || (a.slug < b.slug ? -1 : 1));
     let rowsMoved = 0;
     let maxDisplacement = 0;
     rescored.forEach((r, i) => {
@@ -1485,6 +1499,19 @@ export function irlsOdds(snapshot: Snapshot): { beta: number[]; iters: number } 
     if (delta < 1e-10) break;
   }
   return { beta: w, iters };
+}
+
+/** Brier score of the odds (radar-5 odds review): mean (odds − outcome)²
+ *  over all 758 protocols, outcome "records a token" (symbol present). */
+export function oddsBrier(snapshot: Snapshot): number {
+  const peers = peerStats(snapshot);
+  let sum = 0;
+  for (const p of snapshot.protocols) {
+    const o = oddsValue(p, snapshot.as_of, peers).odds;
+    const y = p.symbol !== null ? 1 : 0;
+    sum += (o - y) * (o - y);
+  }
+  return sum / snapshot.protocols.length;
 }
 
 /** AUC (Mann–Whitney, tie-averaged ranks) of the odds score over all 758. */
@@ -1646,7 +1673,7 @@ export function buildRadar(
     board.map((r) => {
       const p = snapshot.protocols.find((q) => q.slug === r.slug)!;
       const gm = growthMaturity(p, snapshot.as_of);
-      return { slug: r.slug, tvl_usd: r.tvl_usd, category: r.category, growthMult: gm.growthMult, maturityMult: gm.maturityMult };
+      return { slug: r.slug, tvl_usd: r.tvl_usd, category: r.category, growthMult: gm.growthMult, maturityMult: gm.maturityMult, odds: r.odds };
     }),
   );
   for (const r of board) {
@@ -1700,6 +1727,7 @@ export function buildRadar(
     prior_weight: ODDS.priorWeight,
     live_share: peers.liveShare,
     auc,
+    brier: oddsBrier(snapshot),
     mean_live: meanLive,
     mean_pre: meanPre,
   };
@@ -1844,12 +1872,12 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
     if (ranks[i] !== i + 1) return `rank ${i + 1} is ${ranks[i]}`;
   }
   for (let i = 1; i < board.length; i++) {
-    if (board[i]!.implied_value_usd > board[i - 1]!.implied_value_usd) {
-      return `row ${i + 1} outranks row ${i} on implied value`;
+    if (board[i]!.expected_value_usd > board[i - 1]!.expected_value_usd) {
+      return `row ${i + 1} outranks row ${i} on expected value`;
     }
   }
-  if (board.length >= 2 && board[0]!.implied_value_usd === board[board.length - 1]!.implied_value_usd) {
-    return `all ${board.length} rows share the same implied value $${board[0]!.implied_value_usd}: a board that ranks nothing by value is not a ranking`;
+  if (board.length >= 2 && board[0]!.expected_value_usd === board[board.length - 1]!.expected_value_usd) {
+    return `all ${board.length} rows share the same expected value $${board[0]!.expected_value_usd}: a board that ranks nothing by value is not a ranking`;
   }
   for (const r of board) {
     if (r.token_status !== 'pre-token') return `${r.slug} is not a pre-token row`;
