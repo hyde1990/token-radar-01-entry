@@ -1,7 +1,7 @@
 // Token Radar, entry program (Node 22, standard library only).
 //
 // Reads the sealed snapshot, scores every board-eligible pre-token protocol
-// with the radar-7 model in lib/model.ts, and writes the ranked board, the
+// with the radar-8 model in lib/model.ts, and writes the ranked board, the
 // dashboard payload, the dashboard and screenshots, and finally the dossier
 // the judge reads. Deterministic: pure functions, fixed sort tiebreaks, fixed
 // key order in JSON, no clocks, no unseeded randomness, directory listings
@@ -176,7 +176,7 @@ writeFileSync(join(outDir, 'dossier.json'), dossierA);
 
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside, ${fallbackRows} fallback farm plans)\n` +
-    `token radar: rank 1 ${board[0]!.slug} $${board[0]!.implied_value_usd.toLocaleString()} implied value (radar-7, value if launches $${board[0]!.value_if_launches_usd.toLocaleString()}, odds ${board[0]!.odds.toFixed(3)}); overlap vs D1r top-10: ${validation.stability.overlap}/10; verdicts FARM ${radar.verdict_counts.FARM} / THIN ${radar.verdict_counts.THIN} / SKIP ${radar.verdict_counts.SKIP}\n` +
+    `token radar: rank 1 ${board[0]!.slug} $${board[0]!.implied_value_usd.toLocaleString()} implied value (radar-8, value if launches $${board[0]!.value_if_launches_usd.toLocaleString()}, odds ${board[0]!.odds.toFixed(3)}); overlap vs D1r top-10: ${validation.stability.overlap}/10; verdicts FARM ${radar.verdict_counts.FARM} / THIN ${radar.verdict_counts.THIN} / SKIP ${radar.verdict_counts.SKIP}\n` +
     `token radar: LOO median |ln err| ${radar.fit.loo_median.toFixed(4)}, split ${radar.fit.split_median.toFixed(4)}, R² ${radar.fit.r2.toFixed(4)}; odds AUC ${radar.odds.auc.toFixed(4)}\n` +
     `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, ${join(outDir, 'dashboard')} (${dashboardFiles.length} files), ${join(outDir, 'screenshots')} (${shotFiles.length} images) and ${join(outDir, 'dossier.json')}\n`,
 );

@@ -1,4 +1,4 @@
-// Token Radar, model radar-7 (spec D8–D12; D1/D1r retained as the fallback).
+// Token Radar, model radar-8 (spec D8–D12; D1/D1r retained as the fallback).
 //
 // One sealed snapshot in, one ranked board out. The primary model is a pooled
 // log-log OLS fitted to the 128 live-token protocols with a positive market
@@ -25,25 +25,36 @@
 // (submit 01a20804, gate_failed, 1 dev grade spent with no rating). The
 // fitted value stays on every row as the value_if_launches_usd column.
 //
-// Radar-7 refits the model additively from a flat-median baseline (keep a
+// Radar-8 refits the model additively from a flat-median baseline (keep a
 // term only when it lowers median |ln err| in BOTH leave-one-out and
 // walk-forward): only the size curve survives, so the fit is intercept +
 // slope only and every category effect is 0. Farm netting now charges
 // the farmer's active hours at $25/h as opportunity cost (radar-6 never
 // charged them). See fit.additive, fit.range_honesty and odds.cv.
+// Radar-8 odds (T1): the age term is sqrt(age)/10, not ln(age) — the
+// log form saturates too fast for young protocols, and the square-root
+// form lowers Brier in BOTH ten-fold (0.2175 -> 0.2017) and walk-forward
+// (0.2482 -> 0.2106); ln(TVL) and ln(chains) are added terms, each
+// lowering both tests too. An undated protocol is treated as fully
+// mature in the odds model (unknown age 1095 days = maturity_days):
+// undated protocols record a token 78.8% of the time, the same rate as
+// the oldest dated quartile (79.0%), so 365 days understates them.
+// The value model still uses unknown age 365 — changing it there moves
+// neither blind test, so it stays. See odds.decomposition / odds.deciles.
 // The D8 stability gate (top-10 overlap vs D1r) is retired: it measured
 // stability against our own old board, which the judge never sees — see
 // radar-5 spec T1. The bootstrap rank ranges are implied-value ranks
 // (odds held fixed per row across refits); P10–P90 stay fitted-value
 // intervals, checked against value_if_launches_usd, never implied.
 //
-// Evidence (spec D8/D9; radar-7 numbers recomputed independently by the
-// clean-room verifier in verification/verifier-radar7-recompute.py —
-// every number below was reproduced there):
+// Evidence (spec D8/D9; radar-8 numbers recomputed independently by
+// scripts/verify.mjs V15/V16/V22/V23/V28 — every number below was
+// reproduced there):
 //   fit: a = 6.964567, b = 0.522266, R² = 0.1939, residual SD 2.0935, n = 128, df = 126.
 //   LOO median |ln err| 1.2234, RMSE 2.1072; 70/30 split (seed 20261122,
 //   test = first 38 of the seeded shuffle) median 1.4135; LOO P25–P75 57.0% / P10–P90 82.0%.
-//   odds: IRLS on all 758 protocols, outcome "records a token"; AUC 0.7647.
+//   odds: IRLS on all 758 protocols, outcome "records a token"; AUC 0.8068.
+//   Brier in-sample 0.1788, ten-fold 0.2017, walk-forward 0.2106.
 //   The peer share in the shrinkage prior is the EXACT 416/758 from the
 //   snapshot — the rounded 0.5488 quoted in spec D9 does NOT reproduce the
 //   coefficients to 6 decimals (it gives -3.040768 / -3.061051), so the code
@@ -115,7 +126,7 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
 };
 
-export const MODEL_VERSION = 'radar-7';
+export const MODEL_VERSION = 'radar-8';
 
 /** Live-token rows the dashboard's separate live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -140,7 +151,13 @@ export const LABOR_RATE = 25;
  *  fit.additive). No category effect survives: fitted_value for every row
  *  is TVL × the size-curve multiple × growth × maturity. The radar-6
  *  9-dummy fit is NOT retained: dropping its category effects improves
- *  both blind tests (LOO 1.2434 vs 1.2490, walk-forward 1.2126 vs 1.2509). */
+ *  both blind tests (LOO 1.2434 vs 1.2490, walk-forward 1.2126 vs 1.2509).
+ *  Radar-8 keeps this fit unchanged: no clamp bound, no quadratic term,
+ *  no trimmed refit and no multiplier rescale improves LOO and
+ *  walk-forward together while also beating the 70/30 split (see the
+ *  radar-8 builder report for the tested variants), so the three-way
+ *  target (WF < 1.2126, split < 1.4135, R² ≥ 0.19) is reported as missed
+ *  on ties, not forced. */
 export const FIT = {
   intercept: 6.964567,
   slope: 0.522266,
@@ -149,13 +166,20 @@ export const FIT = {
   multipleCap: 0.6,
 };
 
-/** The radar-3 launch-odds model (spec D9): logistic peer resemblance. */
+/** The radar-8 launch-odds model (spec D9, refit in the radar-8 T1
+ *  diagnosis): logistic peer resemblance with a square-root age term
+ *  and size/chain terms. Full-sample IRLS coefficients, 6 dp. */
 export const ODDS = {
-  intercept: -3.040781,
-  age: 0.446892,
-  growth: -3.061039,
-  peer: 1.329665,
+  intercept: -4.476214,
+  peer: 1.548137,
+  ageSqrt: 0.736089,
+  growth: -2.157480,
+  tvl: 0.115830,
+  chains: 0.325493,
   priorWeight: 5,
+  /** Undated protocols are treated as fully mature in the odds model
+   *  only (1095 days = maturity_days); the value model keeps 365. */
+  unknownAgeDays: 1095,
 };
 
 /** Category multiples of the D1r fallback (median mcap/TVL, n >= 5, clamped). */
@@ -432,10 +456,13 @@ export interface FitMetrics {
 /** The launch-odds evidence, computed from the snapshot. */
 export interface OddsMetrics {
   intercept: number;
-  age: number;
-  growth: number;
   peer: number;
+  age_sqrt: number;
+  growth: number;
+  tvl: number;
+  chains: number;
   prior_weight: number;
+  unknown_age_days: number;
   live_share: number;
   auc: number;
   /** Mean (odds − outcome)² over all 758 protocols, outcome "records a
@@ -448,6 +475,33 @@ export interface OddsMetrics {
   cv: OddsCvRow[];
   brier_tenfold: number;
   brier_wf: number;
+  /** Radar-8 T1: decile calibration (predicted vs realised launch rate)
+   *  and the per-term logit decomposition of the top-3 implied rows. */
+  deciles: OddsDecile[];
+  decomposition: OddsDecomposition[];
+}
+
+/** One decile of the odds calibration: predicted vs realised launch rate. */
+export interface OddsDecile {
+  decile: number;
+  n: number;
+  predicted: number;
+  realised: number;
+}
+
+/** The per-term logit decomposition of one board row (radar-8 T1). */
+export interface OddsDecomposition {
+  rank: number;
+  slug: string;
+  name: string;
+  intercept: number;
+  peer: number;
+  age: number;
+  growth: number;
+  tvl: number;
+  chains: number;
+  logit: number;
+  odds: number;
 }
 
 /** The 758-protocol ledger (spec D12), computed from the snapshot. */
@@ -661,25 +715,55 @@ export function peerStats(snapshot: Snapshot): PeerStats {
   return { catTot, catLive, liveShare: liveCount / snapshot.protocols.length };
 }
 
-/** The launch odds for one protocol (spec D9). `peerShrunk` uses the exact
- *  live share from the snapshot, not the rounded 0.5488 in the spec text —
- *  the rounded share does not reproduce the D9 coefficients to 6 decimals. */
+/** The launch odds for one protocol (spec D9, radar-8 refit). `peerShrunk`
+ *  uses the exact live share from the snapshot, not the rounded 0.5488 in
+ *  the spec text — the rounded share does not reproduce the D9 coefficients
+ *  to 6 decimals. Age enters as sqrt(age)/10 with an undated protocol
+ *  treated as fully mature (ODDS.unknownAgeDays); size and chain count
+ *  enter as ln(TVL) and ln(min(chains, 10)). */
 export function oddsValue(
   protocol: SnapshotProtocol,
   asOf: string,
   peers: PeerStats,
-): { odds: number; logit: number; ageTerm: number; growthTerm: number; peerLogit: number; peerShrunk: number } {
-  const age = ageDays(asOf, protocol.listed_at) ?? MODEL.unknown_age_days;
-  const ageTerm = Math.log(age);
+): {
+  odds: number;
+  logit: number;
+  ageTerm: number;
+  growthTerm: number;
+  peerLogit: number;
+  peerShrunk: number;
+  tvlTerm: number;
+  chainsTerm: number;
+  /** Per-term logit contributions (coefficient × term value). */
+  contributions: { intercept: number; peer: number; age: number; growth: number; tvl: number; chains: number };
+} {
+  const age = ageDays(asOf, protocol.listed_at) ?? ODDS.unknownAgeDays;
+  const ageTerm = Math.sqrt(age) / 10;
   const growthTerm = clamp(finite(protocol.change_7d, 0), MODEL.growth_floor, MODEL.growth_cap) / 100;
+  const tvlTerm = Math.log(protocol.tvl_usd);
+  const chainsTerm = Math.log(Math.min(protocol.chains.length, 10));
   const c = protocol.category ?? '';
   const peerShrunk =
     ((peers.catLive[c] ?? 0) + ODDS.priorWeight * peers.liveShare) /
     ((peers.catTot[c] ?? 0) + ODDS.priorWeight);
   const peerLogit = Math.log(peerShrunk / (1 - peerShrunk));
-  const logit = ODDS.intercept + ODDS.age * ageTerm + ODDS.growth * growthTerm + ODDS.peer * peerLogit;
+  const contributions = {
+    intercept: ODDS.intercept,
+    peer: ODDS.peer * peerLogit,
+    age: ODDS.ageSqrt * ageTerm,
+    growth: ODDS.growth * growthTerm,
+    tvl: ODDS.tvl * tvlTerm,
+    chains: ODDS.chains * chainsTerm,
+  };
+  const logit =
+    contributions.intercept +
+    contributions.peer +
+    contributions.age +
+    contributions.growth +
+    contributions.tvl +
+    contributions.chains;
   const odds = 1 / (1 + Math.exp(-logit));
-  return { odds, logit, ageTerm, growthTerm, peerLogit, peerShrunk };
+  return { odds, logit, ageTerm, growthTerm, peerLogit, peerShrunk, tvlTerm, chainsTerm, contributions };
 }
 
 /** How much capital one farm position needs, from the protocol's own TVL. */
@@ -1247,7 +1331,7 @@ export function fitValidation(snapshot: Snapshot): {
   }
   // V1: the fitted model (radar-7: slope only — the additive ablation
   // kept no category term).
-  addRace('V1 radar-7 (slope only)', looErr, splitErr);
+  addRace('V1 radar-8 (slope only)', looErr, splitErr);
   // V2/V3: slope fixed, outcome ln(mcap) - s0*ln(TVL), OLS intercept + dummies.
   for (const [variant, s0] of [
     ['V2 slope fixed 0.90', 0.9],
@@ -1633,8 +1717,10 @@ export function compsForRow(
   };
 }
 
-/** One odds term id (radar-7 T1). */
-export type OddsTerm = 'peer' | 'age' | 'growth';
+/** One odds term id (radar-8 T1: peer, square-root age, growth, ln TVL,
+ *  ln chains — each kept only when it lowers Brier in BOTH ten-fold
+ *  and walk-forward). */
+export type OddsTerm = 'peer' | 'age' | 'growth' | 'tvl' | 'chains';
 
 /** The shrunken peer live-share for one protocol (spec D9). */
 function peerShrunkValue(p: SnapshotProtocol, peers: PeerStats): number {
@@ -1645,17 +1731,17 @@ function peerShrunkValue(p: SnapshotProtocol, peers: PeerStats): number {
   );
 }
 
-/** IRLS logistic fit for one odds term set (radar-7 T1). Columns are
- *  built in the order intercept, peer logit, ln age, growth — the
- *  returned coefficients are named, so a dropped term is simply 0.
- *  The full set reproduces the D9 coefficients. */
+/** IRLS logistic fit for one odds term set (radar-8 T1). Columns are
+ *  built in the order intercept, peer logit, sqrt age, growth, ln TVL,
+ *  ln chains — the returned coefficients are named, so a dropped term
+ *  is simply 0. The full set reproduces the radar-8 coefficients. */
 export function irlsOddsFor(
   snapshot: Snapshot,
   terms: ReadonlySet<OddsTerm>,
-): { intercept: number; peer: number; age: number; growth: number; iters: number } {
+): { intercept: number; peer: number; ageSqrt: number; growth: number; tvl: number; chains: number; iters: number } {
   const peers = peerStats(snapshot);
   const cols: ((p: SnapshotProtocol) => number)[] = [() => 1];
-  const names: ('intercept' | 'peer' | 'age' | 'growth')[] = ['intercept'];
+  const names: ('intercept' | 'peer' | 'ageSqrt' | 'growth' | 'tvl' | 'chains')[] = ['intercept'];
   if (terms.has('peer')) {
     cols.push((p) => {
       const ps = peerShrunkValue(p, peers);
@@ -1664,12 +1750,20 @@ export function irlsOddsFor(
     names.push('peer');
   }
   if (terms.has('age')) {
-    cols.push((p) => Math.log(ageDays(snapshot.as_of, p.listed_at) ?? MODEL.unknown_age_days));
-    names.push('age');
+    cols.push((p) => Math.sqrt(ageDays(snapshot.as_of, p.listed_at) ?? ODDS.unknownAgeDays) / 10);
+    names.push('ageSqrt');
   }
   if (terms.has('growth')) {
     cols.push((p) => clamp(finite(p.change_7d, 0), MODEL.growth_floor, MODEL.growth_cap) / 100);
     names.push('growth');
+  }
+  if (terms.has('tvl')) {
+    cols.push((p) => Math.log(p.tvl_usd));
+    names.push('tvl');
+  }
+  if (terms.has('chains')) {
+    cols.push((p) => Math.log(Math.min(p.chains.length, 10)));
+    names.push('chains');
   }
   const X = snapshot.protocols.map((p) => cols.map((f) => f(p)));
   const y = snapshot.protocols.map((p) => (p.symbol !== null ? 1 : 0));
@@ -1700,19 +1794,20 @@ export function irlsOddsFor(
     w = nw;
     if (delta < 1e-10) break;
   }
-  const out = { intercept: 0, peer: 0, age: 0, growth: 0, iters };
+  const out = { intercept: 0, peer: 0, ageSqrt: 0, growth: 0, tvl: 0, chains: 0, iters };
   names.forEach((name, i) => {
     out[name] = w[i]!;
   });
   return out;
 }
 
-/** IRLS logistic fit for the odds model (spec D9). Returns the
- *  coefficients in the D9 order [intercept, age, growth, peer] and the
- *  iteration count. The verify suite carries its own copy. */
+/** IRLS logistic fit for the odds model (spec D9, radar-8 refit).
+ *  Returns the coefficients in the order [intercept, peer, sqrt age,
+ *  growth, ln TVL, ln chains] and the iteration count. The verify suite
+ *  carries its own copy. */
 export function irlsOdds(snapshot: Snapshot): { beta: number[]; iters: number } {
-  const r = irlsOddsFor(snapshot, new Set<OddsTerm>(['peer', 'age', 'growth']));
-  return { beta: [r.intercept, r.age, r.growth, r.peer], iters: r.iters };
+  const r = irlsOddsFor(snapshot, new Set<OddsTerm>(['peer', 'age', 'growth', 'tvl', 'chains']));
+  return { beta: [r.intercept, r.peer, r.ageSqrt, r.growth, r.tvl, r.chains], iters: r.iters };
 }
 
 /** Brier score of one odds term set on a protocol list: mean
@@ -1733,8 +1828,10 @@ function oddsBrierFor(
   for (const p of test) {
     let eta = beta.intercept;
     if (terms.has('peer')) eta += beta.peer * Math.log(peerShrunkValue(p, peers) / (1 - peerShrunkValue(p, peers)));
-    if (terms.has('age')) eta += beta.age * Math.log(ageDays(asOf, p.listed_at) ?? MODEL.unknown_age_days);
+    if (terms.has('age')) eta += beta.ageSqrt * (Math.sqrt(ageDays(asOf, p.listed_at) ?? ODDS.unknownAgeDays) / 10);
     if (terms.has('growth')) eta += beta.growth * (clamp(finite(p.change_7d, 0), MODEL.growth_floor, MODEL.growth_cap) / 100);
+    if (terms.has('tvl')) eta += beta.tvl * Math.log(p.tvl_usd);
+    if (terms.has('chains')) eta += beta.chains * Math.log(Math.min(p.chains.length, 10));
     const o = 1 / (1 + Math.exp(-clamp(eta, -30, 30)));
     const yy = p.symbol !== null ? 1 : 0;
     sum += (o - yy) * (o - yy);
@@ -1742,16 +1839,19 @@ function oddsBrierFor(
   return sum / test.length;
 }
 
-/** The additive odds selection (radar-7 T1): base rate, then peer, age,
- *  growth in that order, each against the terms kept so far. Ten-fold is
- *  a seeded shuffle of all 758 protocols (mulberry32 seed 20261122,
- *  fold = position mod 10); walk-forward trains on the oldest dated
- *  protocols (folds 430/215 and 516/129 of the 645 dated). */
+/** The additive odds selection (radar-8 T1): base rate, then peer,
+ *  sqrt age, growth, ln TVL, ln chains in that order, each against the
+ *  terms kept so far. Ten-fold is a seeded shuffle of all 758 protocols
+ *  (mulberry32 seed 20261122, fold = position mod 10); walk-forward
+ *  trains on the oldest dated protocols (folds 430/215 and 516/129 of
+ *  the 645 dated). */
 export function oddsCv(snapshot: Snapshot): { rows: OddsCvRow[]; brier_tenfold: number; brier_wf: number } {
   const order: { id: OddsTerm; term: string }[] = [
     { id: 'peer', term: 'peer logit' },
-    { id: 'age', term: 'ln age' },
+    { id: 'age', term: 'sqrt age' },
     { id: 'growth', term: 'growth' },
+    { id: 'tvl', term: 'ln TVL' },
+    { id: 'chains', term: 'ln chains' },
   ];
   const evalTerms = (terms: ReadonlySet<OddsTerm>): { tenFold: number; wf: number } => {
     const all = snapshot.protocols;
@@ -1797,6 +1897,50 @@ export function oddsCv(snapshot: Snapshot): { rows: OddsCvRow[]; brier_tenfold: 
     }
   }
   return { rows, brier_tenfold: cur.tenFold, brier_wf: cur.wf };
+}
+
+/** Decile calibration of the odds (radar-8 T1): all 758 protocols sorted
+ *  by predicted odds, ten equal groups, predicted mean vs realised
+ *  launch rate per group. */
+export function oddsDeciles(snapshot: Snapshot): OddsDecile[] {
+  const peers = peerStats(snapshot);
+  const scored = snapshot.protocols
+    .map((p) => ({ o: oddsValue(p, snapshot.as_of, peers).odds, y: p.symbol !== null ? 1 : 0 }))
+    .sort((a, b) => a.o - b.o);
+  const out: OddsDecile[] = [];
+  for (let d = 0; d < 10; d++) {
+    const chunk = scored.slice(Math.floor((d * scored.length) / 10), Math.floor(((d + 1) * scored.length) / 10));
+    out.push({
+      decile: d + 1,
+      n: chunk.length,
+      predicted: chunk.reduce((s, r) => s + r.o, 0) / chunk.length,
+      realised: chunk.reduce((s, r) => s + r.y, 0) / chunk.length,
+    });
+  }
+  return out;
+}
+
+/** Per-term logit decomposition of the top-3 implied board rows
+ *  (radar-8 T1): the rows are picked by rank, never by name. */
+export function oddsDecomposition(board: BoardRow[], snapshot: Snapshot): OddsDecomposition[] {
+  const peers = peerStats(snapshot);
+  return board.slice(0, 3).map((r) => {
+    const p = snapshot.protocols.find((q) => q.slug === r.slug)!;
+    const o = oddsValue(p, snapshot.as_of, peers);
+    return {
+      rank: r.rank,
+      slug: r.slug,
+      name: r.name,
+      intercept: round6(o.contributions.intercept),
+      peer: round6(o.contributions.peer),
+      age: round6(o.contributions.age),
+      growth: round6(o.contributions.growth),
+      tvl: round6(o.contributions.tvl),
+      chains: round6(o.contributions.chains),
+      logit: round6(o.logit),
+      odds: r.odds,
+    };
+  });
 }
 
 /** Brier score of the odds (radar-5 odds review): mean (odds − outcome)²
@@ -2027,10 +2171,13 @@ export function buildRadar(
   const cv = oddsCv(snapshot);
   const oddsMetrics: OddsMetrics = {
     intercept: ODDS.intercept,
-    age: ODDS.age,
-    growth: ODDS.growth,
     peer: ODDS.peer,
+    age_sqrt: ODDS.ageSqrt,
+    growth: ODDS.growth,
+    tvl: ODDS.tvl,
+    chains: ODDS.chains,
     prior_weight: ODDS.priorWeight,
+    unknown_age_days: ODDS.unknownAgeDays,
     live_share: peers.liveShare,
     auc,
     brier: oddsBrier(snapshot),
@@ -2039,6 +2186,8 @@ export function buildRadar(
     cv: cv.rows,
     brier_tenfold: cv.brier_tenfold,
     brier_wf: cv.brier_wf,
+    deciles: oddsDeciles(snapshot),
+    decomposition: oddsDecomposition(board, snapshot),
   };
 
   const ledger = buildLedger(snapshot, board);
@@ -2054,7 +2203,7 @@ export function buildRadar(
   const fitExpected = [FIT.intercept, FIT.slope, ...Object.keys(FIT.effects).sort().map((c) => FIT.effects[c]!)];
   const fitMaxDelta = Math.max(...val.beta.map((v, i) => Math.abs(v - fitExpected[i]!)));
   const fitMatches6dp = val.beta.every((v, i) => v.toFixed(6) === fitExpected[i]!.toFixed(6));
-  const oddsExpected = [ODDS.intercept, ODDS.age, ODDS.growth, ODDS.peer];
+  const oddsExpected = [ODDS.intercept, ODDS.peer, ODDS.ageSqrt, ODDS.growth, ODDS.tvl, ODDS.chains];
   const oddsMaxDelta = Math.max(...oddsBeta.map((v, i) => Math.abs(v - oddsExpected[i]!)));
   const oddsMatches6dp = oddsBeta.every((v, i) => v.toFixed(6) === oddsExpected[i]!.toFixed(6));
   const ledgerOk =
@@ -2143,15 +2292,23 @@ export function parseSnapshot(text: string): Snapshot {
       typeof p.slug !== 'string' ||
       typeof p.name !== 'string' ||
       typeof p.tvl_usd !== 'number' ||
-      !Number.isFinite(p.tvl_usd)
+      !Number.isFinite(p.tvl_usd) ||
+      p.tvl_usd <= 0
     ) {
-      throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a TVL`);
+      throw new SnapshotError(`snapshot.json's protocol ${i} lacks a slug, a name or a positive TVL`);
+    }
+    // LOW-3 (fix radar-8): log(TVL) / log(chains) below need TVL > 0 and at
+    // least one chain; a 0-chain row would give logit -Infinity (odds 0),
+    // TVL <= 0 would give NaN odds. Reject the row loudly, never silently.
+    const chains = Array.isArray(p.chains) ? p.chains.filter((c): c is string => typeof c === 'string') : [];
+    if (chains.length === 0) {
+      throw new SnapshotError(`snapshot.json's protocol ${i} has no chains`);
     }
     return {
       slug: p.slug,
       name: p.name,
       category: typeof p.category === 'string' ? p.category : null,
-      chains: Array.isArray(p.chains) ? p.chains.filter((c): c is string => typeof c === 'string') : [],
+      chains,
       tvl_usd: p.tvl_usd,
       change_7d: typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : null,
       mcap_usd: typeof p.mcap_usd === 'number' && Number.isFinite(p.mcap_usd) ? p.mcap_usd : null,

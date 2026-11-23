@@ -36,8 +36,6 @@ button { cursor: pointer; }
 .top-meta { display: flex; flex-wrap: wrap; gap: var(--s3); color: var(--muted); font-size: 13px; margin: 0; }
 main { max-width: 1320px; margin: 0 auto; padding: 0 var(--s5) var(--s6); }
 
-.lede { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.6fr); gap: var(--s5); padding: var(--s3) 0; }
-.lede p { color: var(--muted); max-width: 68ch; margin-top: var(--s2); }
 .formula {
   font-family: var(--font); font-size: 13px; color: var(--accent-ink);
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
@@ -45,10 +43,8 @@ main { max-width: 1320px; margin: 0 auto; padding: 0 var(--s5) var(--s6); }
   border-radius: var(--radius); padding: var(--s2) var(--s3); margin-top: var(--s3);
   overflow-wrap: anywhere;
 }
-.facts { display: grid; gap: var(--s2); align-content: start; border-left: 2px solid var(--accent); padding-left: var(--s4); margin: 0; }
-.facts div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
-.facts dt { color: var(--muted); font-size: 13px; }
-.facts dd { margin: 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.summary { padding: var(--s2) 0; border-top: 1px solid var(--border); }
+.summary p { color: var(--muted); font-size: 13px; max-width: 132ch; }
 
 .controls {
   display: flex; flex-wrap: wrap; align-items: end; gap: var(--s2);
@@ -58,10 +54,12 @@ main { max-width: 1320px; margin: 0 auto; padding: 0 var(--s5) var(--s6); }
 .field label { color: var(--muted); font-size: 12px; }
 .field input, .field select {
   min-height: 36px; padding: 0 var(--s2); border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--surface); min-width: 170px;
+  border-radius: var(--radius); background: var(--surface); min-width: 120px;
 }
-.field input[type="search"] { min-width: 230px; }
-.field input[type="number"] { min-width: 110px; }
+/* Fixed widths: a select grows to its longest option and wraps the controls (T3 C4). */
+.field select { width: 130px; }
+.field input[type="search"] { width: 150px; }
+.field input[type="number"] { width: 80px; }
 .check { display: flex; align-items: center; gap: var(--s2); min-height: 36px; font-size: 14px; }
 .check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .count { margin-left: auto; color: var(--muted); font-size: 13px; align-self: center; }
@@ -75,7 +73,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 0 var(--s5) var(--s6); }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 caption { text-align: left; color: var(--muted); font-size: 12px; padding: var(--s3) var(--s3) 0; }
-th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+th, td { padding: 6px 4px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
 th { color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
 th button { border: 0; background: none; padding: 0; color: inherit; font: inherit; display: inline-flex; gap: var(--s1); align-items: center; }
 th button:hover { color: var(--ink); }
@@ -84,7 +82,7 @@ th button[aria-sort="ascending"]::after { content: " ↑"; color: var(--accent);
 tbody tr { cursor: pointer; }
 tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
-.name { display: grid; gap: 1px; }
+.name { display: grid; gap: 1px; white-space: nowrap; }
 .name b { font-weight: 600; }
 .sub { color: var(--muted); font-size: 12px; }
 .tag {
@@ -144,8 +142,6 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 12
 
 @media (max-width: 900px) {
   .top, main { padding-left: var(--s3); padding-right: var(--s3); }
-  .lede { grid-template-columns: 1fr; gap: var(--s3); }
-  .facts { border-left: 0; border-top: 2px solid var(--accent); padding-left: 0; padding-top: var(--s3); }
   .field input[type="search"] { min-width: 0; width: 100%; }
   .count { margin-left: 0; }
 }

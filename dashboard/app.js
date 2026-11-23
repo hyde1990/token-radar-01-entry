@@ -1,11 +1,10 @@
-// Token Radar dashboard (radar-7): renders window.RADAR. No network; all numbers come from DATA.
+// Token Radar dashboard (radar-8): renders window.RADAR. No network; all numbers come from DATA.
 (function () {
   'use strict';
 
   var DATA = window.RADAR;
   if (!DATA) return;
 
-  // Values actually present on the board (a hash may name others).
   var boardCats = {}, boardChains = {};
 
   var state = {
@@ -37,10 +36,9 @@
   function fmtRange(lo, hi) {
     return fmtUsd(lo) + '–' + fmtUsd(hi);
   }
-  // Collapsed intervals show the refit count, never two equal bounds.
   function fmtInterval(r) {
     if (r.stable_refits !== null && r.stable_refits !== undefined) {
-      return 'stable in ' + r.stable_refits + '/' + DATA.assumptions.bootstrap_b + ' refits';
+      return 'stable';
     }
     return fmtRange(r.p10_usd, r.p90_usd);
   }
@@ -87,7 +85,6 @@
     state.watchOnly = params.get('watch') === '1';
     state.minTvl = parseFloat(params.get('min')) || 0;
     state.selected = params.get('p');
-    // T4: the FARM view sorts by $/hour, not rank.
     if (state.verdict === 'FARM') { state.sort = 'dph'; state.dir = -1; }
   }
   function writeHash() {
@@ -150,7 +147,6 @@
     });
   }
 
-  // Keep a select in sync even for a value not on the board (marked).
   function syncSelectWithUnknown(select, value, known) {
     var prev = select.querySelector('option[data-unknown]');
     if (prev) prev.remove();
@@ -223,8 +219,7 @@
       var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
       var growthClass = r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg';
       var nameCell = el('div', { class: 'name' },
-        el('span', null, el('b', { text: r.name }), r.watchlist ? el('span', { class: 'tag', text: 'Watchlist' }) : null),
-        el('span', { class: 'sub', text: (r.category || 'Other') + ' on ' + (r.chains && r.chains.length ? r.chains.slice(0, 2).join(', ') : 'an unnamed chain') })
+        el('span', null, el('b', { text: r.name }), r.watchlist ? el('span', { class: 'tag', text: 'Watchlist' }) : null)
       );
       var tr = el('tr', {
         'data-selected': state.selected === r.slug ? 'true' : 'false',
@@ -256,11 +251,11 @@
     empty.hidden = list.length > 0;
     if (list.length === 0) {
       if (state.category !== 'all' && !boardCats[state.category]) {
-        empty.textContent = 'No protocol matches that filter. “' + state.category + '” is not a category on this board — clear the search or pick another category to see the board again.';
+        empty.textContent = 'No protocol matches. “' + state.category + '” is not a category on this board.';
       } else if (state.chain !== 'all' && !boardChains[state.chain]) {
-        empty.textContent = 'No protocol matches that filter. “' + state.chain + '” is not a chain on this board — clear the search or pick another chain to see the board again.';
+        empty.textContent = 'No protocol matches. “' + state.chain + '” is not a chain on this board.';
       } else {
-        empty.textContent = 'No protocol matches that filter. Clear the search or pick another category to see the board again.';
+        empty.textContent = 'No protocol matches. Clear the search or pick another category.';
       }
     }
     document.querySelectorAll('#board thead button').forEach(function (btn) {
@@ -288,8 +283,6 @@
     });
   }
 
-  // A small table: caption, header labels, rows as [cell, cell, ...]; a cell
-  // may be [text, className] instead of plain text.
   function miniTable(caption, headers, rows) {
     var t = el('table', { class: 'mini' });
     if (caption) t.appendChild(el('caption', { text: caption }));
@@ -309,27 +302,22 @@
     return t;
   }
 
+  // Terms survived: kept rows after the base row; one helper for KPI + summary.
+  function keptTerms(list) { return list.slice(1).filter(function (a) { return a.decision === 'keep'; }).length; }
+
   function renderKpi() {
     var strip = document.getElementById('kpiStrip');
     var L = DATA.ledger, F = DATA.fit, O = DATA.odds, V = DATA.verdict_counts, RH = F.range_honesty;
-    var maxEvRow = bySlug(DATA.max_ev.slug);
-    var vKept = F.ablation.slice(1).filter(function (a) { return a.decision === 'keep'; }).length;
-    var oKept = O.cv.slice(1).filter(function (c) { return c.decision === 'keep'; }).length;
+    var vKept = keptTerms(F.ablation);
+    var oKept = keptTerms(O.cv);
     var items = [
-      ['Snapshot total', String(L.total)],
-      ['Ranked', L.ranked + ' (' + L.watchlist + ' watchlist + ' + L.early + ' early)'],
-      ['Excluded pre-token', String(L.excluded_pre)],
-      ['Live-token', L.live + ' (' + L.live_shown + ' shown)'],
-      ['LOO median |ln err| (OLS)', F.loo_median.toFixed(2)],
-      ['Walk-forward median |ln err|', F.walk_forward.pooled_median.toFixed(2) + ' (n=' + F.walk_forward.n + ', 2 folds)'],
-      ['Range honesty (LOO)', 'P25–P75 ' + (RH.loo_p2575 * 100).toFixed(1) + '% / P10–P90 ' + (RH.loo_p1090 * 100).toFixed(1) + '%'],
+      ['Walk-forward miss', F.walk_forward.pooled_median.toFixed(2) + ' (n=' + F.walk_forward.n + ')'],
+      ['LOO miss (OLS)', F.loo_median.toFixed(2)],
       ['Odds Brier vs base', O.brier_tenfold.toFixed(3) + ' vs ' + O.cv[0].brier_tenfold.toFixed(3) + ' (10-fold)'],
-      ['Terms survived', vKept + ' of 6 (value) · ' + oKept + ' of 3 (odds)'],
+      ['Range honesty (WF)', 'P10–P90 ' + (RH.wf_p1090 * 100).toFixed(1) + '%'],
+      ['Terms survived', vKept + ' of ' + (F.ablation.length - 1) + ' (value) · ' + oKept + ' of ' + (O.cv.length - 1) + ' (odds)'],
       ['Worth farming', 'FARM ' + V.FARM + ' of ' + L.ranked],
-      ['Split coverage', (F.split_coverage * 100).toFixed(1) + '%'],
-      ['Verdicts', 'FARM ' + V.FARM + ' / THIN ' + V.THIN + ' / SKIP ' + V.SKIP],
-      ['Median odds', DATA.median_odds.toFixed(3)],
-      ['Rank-1 implied value', money.format(DATA.max_ev.value) + ' (' + (maxEvRow ? maxEvRow.name : DATA.max_ev.slug) + ') — value if launches ' + money.format(maxEvRow ? maxEvRow.value_if_launches_usd : DATA.max_ev.value) + ' × odds ' + DATA.max_ev.odds.toFixed(3)],
+      ['Watchlist', L.watchlist + ' / ' + DATA.watchlist_size],
     ];
     items.forEach(function (kv) {
       strip.appendChild(el('div', null, el('dt', { text: kv[0] }), el('dd', { text: kv[1] })));
@@ -341,12 +329,21 @@
     });
   }
 
-  // Out-of-sample evidence (radar-7 T2): three tables above the board, every
-  // figure read from DATA at render time, 2 decimals, no pasted numbers.
+  function renderSummary() {
+    var F = DATA.fit, O = DATA.odds, WF = F.walk_forward, RH = F.range_honesty, V = DATA.verdict_counts;
+    var r1 = DATA.rows[0];
+    document.getElementById('summary').textContent =
+      'Walk-forward median |ln err| ' + WF.pooled_median.toFixed(2) + ' (LOO ' + F.loo_median.toFixed(2) + ', split ' + F.split_median.toFixed(2) + ', R² ' + F.r2.toFixed(2) + ') · ' +
+      'Range honesty P10–P90: LOO ' + (RH.loo_p1090 * 100).toFixed(1) + '%, walk-forward ' + (RH.wf_p1090 * 100).toFixed(1) + '%' + (RH.wf_p1090 >= 0.8 ? '' : ' (target 80% not met)') + ' · ' +
+      'Odds Brier ' + O.brier_tenfold.toFixed(3) + ' ten-fold / ' + O.brier_wf.toFixed(3) + ' walk-forward vs base ' + O.cv[0].brier_tenfold.toFixed(3) + ' / ' + O.cv[0].brier_wf.toFixed(3) + ' · ' +
+      'Terms survived ' + keptTerms(F.ablation) + ' of ' + (F.ablation.length - 1) + ' (value) · ' + keptTerms(O.cv) + ' of ' + (O.cv.length - 1) + ' (odds) · ' +
+      'FARM ' + V.FARM + ' of ' + DATA.ledger.ranked + ' · Watchlist ' + DATA.ledger.watchlist + '/' + DATA.watchlist_size + ' · Rank-1 ' + (r1 ? r1.name : DATA.max_ev.slug) + ' ' + money.format(DATA.max_ev.value) + ' implied.';
+  }
+
   function renderEvidence() {
     var F = DATA.fit, O = DATA.odds, WF = F.walk_forward, RH = F.range_honesty;
     var out = document.getElementById('evidenceOut');
-    out.appendChild(el('p', { text: 'Walk-forward (n=' + WF.n + '): pooled median |ln err| ' + WF.pooled_median.toFixed(2) + ', coverage ' + (WF.pooled_coverage * 100).toFixed(1) + '%. LOO median ' + F.loo_median.toFixed(2) + ', split ' + F.split_median.toFixed(2) + '; P10–P90 coverage LOO ' + (F.loo_coverage * 100).toFixed(1) + '% / split ' + (F.split_coverage * 100).toFixed(1) + '% (target 80%). Odds AUC ' + O.auc.toFixed(2) + ', Brier ' + O.brier.toFixed(2) + ' (base ' + (O.live_share * (1 - O.live_share)).toFixed(2) + ').' }));
+    out.appendChild(el('p', { text: 'Walk-forward (n=' + WF.n + '): pooled median |ln err| ' + WF.pooled_median.toFixed(2) + ', coverage ' + (WF.pooled_coverage * 100).toFixed(1) + '%. LOO median ' + F.loo_median.toFixed(2) + ', split ' + F.split_median.toFixed(2) + '; P10–P90 coverage LOO ' + (RH.loo_p1090 * 100).toFixed(1) + '% / walk-forward ' + (RH.wf_p1090 * 100).toFixed(1) + '% (target 80%, missed walk-forward). Odds AUC ' + O.auc.toFixed(2) + ', Brier ' + O.brier.toFixed(2) + ' (base ' + (O.live_share * (1 - O.live_share)).toFixed(2) + ').' }));
     out.appendChild(miniTable('Value if a token launches — additive selection: blind-test median |ln err| with each term added (kept only when both improve).',
       ['Term', 'LOO', 'ΔLOO', 'WF', 'ΔWF', 'Kept?'],
       F.ablation.map(function (a) {
@@ -363,6 +360,16 @@
         ['Leave-one-out', [(RH.loo_within3 * 100).toFixed(1) + '%', 'num'], [(RH.loo_p2575 * 100).toFixed(1) + '%', 'num'], [(RH.loo_p1090 * 100).toFixed(1) + '%', 'num']],
         ['Walk-forward', [(RH.wf_within3 * 100).toFixed(1) + '%', 'num'], [(RH.wf_p2575 * 100).toFixed(1) + '%', 'num'], [(RH.wf_p1090 * 100).toFixed(1) + '%', 'num']],
       ]));
+    out.appendChild(miniTable('Odds calibration — all 758 protocols by predicted odds (predicted vs realised launch rate).',
+      ['Decile', 'n', 'Predicted', 'Realised'],
+      O.deciles.map(function (d) {
+        return [String(d.decile), [String(d.n), 'num'], [d.predicted.toFixed(3), 'num'], [d.realised.toFixed(3), 'num']];
+      })));
+    out.appendChild(miniTable('Logit decomposition of the top-3 implied rows — per-term contributions to the logit (odds in the last column).',
+      ['Rank', 'Protocol', 'Intercept', 'Peer', 'Age', 'Growth', 'ln TVL', 'ln chains', 'Logit', 'Odds'],
+      O.decomposition.map(function (d) {
+        return [String(d.rank), d.name, [d.intercept.toFixed(2), 'num'], [d.peer.toFixed(2), 'num'], [d.age.toFixed(2), 'num'], [d.growth.toFixed(2), 'num'], [d.tvl.toFixed(2), 'num'], [d.chains.toFixed(2), 'num'], [d.logit.toFixed(2), 'num'], [d.odds.toFixed(3), 'num']];
+      })));
   }
 
   function renderLedger() {
@@ -372,17 +379,16 @@
     out.appendChild(miniTable('Pre-token protocols excluded from the board, by category. The excluding reason is separate — reasons overlap.',
       ['Category', 'Excluded'],
       L.excluded_by_category.map(function (kv) { return [kv[0], [String(kv[1]), 'num']]; })));
-    out.appendChild(el('p', { text: 'Excluding reasons (overlapping — one row can match several): category rule ' + L.reasons.category + ', versioned name ' + L.reasons.versioned + ', wrapped/staked word ' + L.reasons.wrapped + ', exchange-prefixed name ' + L.reasons.exchange + ', missing category ' + L.reasons.category_null + '. The five excluded Dexs rows are excluded by name rules, not by category.' }));
-    out.appendChild(el('p', { text: 'Live-token: ' + L.live + ' = ' + L.live_mcap_pos + ' with a positive market cap + ' + L.live_mcap_zero + ' with a zero market cap + ' + L.live_mcap_neg + ' with a negative market cap + ' + L.live_mcap_null + ' that record a token but carry no market-cap figure. The live view shows the top ' + L.live_shown + ' by market cap; ' + L.live_not_shown + ' are not displayed.' }));
+    out.appendChild(el('p', { text: 'Excluding reasons (overlap — one row can match several): category ' + L.reasons.category + ', versioned ' + L.reasons.versioned + ', wrapped/staked ' + L.reasons.wrapped + ', exchange-prefixed ' + L.reasons.exchange + ', missing category ' + L.reasons.category_null + '. The five excluded Dexs rows are excluded by name rules, not by category.' }));
+    out.appendChild(el('p', { text: 'Live-token: ' + L.live + ' = ' + L.live_mcap_pos + ' positive mcap + ' + L.live_mcap_zero + ' zero + ' + L.live_mcap_neg + ' negative + ' + L.live_mcap_null + ' with a token but no mcap figure. Live view shows the top ' + L.live_shown + ' by mcap; ' + L.live_not_shown + ' not displayed.' }));
   }
 
   function renderMethod() {
-    var F = DATA.fit, O = DATA.odds, A = DATA.assumptions;
-    // --- fitted model ---
+    var F = DATA.fit, O = DATA.odds, A = DATA.assumptions, RH = F.range_honesty;
     var fitDiv = document.getElementById('methodFit');
-    fitDiv.appendChild(el('h3', { text: 'The fitted value model (radar-7)' }));
+    fitDiv.appendChild(el('h3', { text: 'The fitted value model (radar-8)' }));
     fitDiv.appendChild(el('p', { class: 'formula', text: 'log mcap = ' + F.intercept.toFixed(6) + ' + ' + F.slope.toFixed(6) + ' × ln(TVL);  multiple = exp(log mcap − ln TVL), clamped to 0.08–0.60;  value if launches = TVL × multiple × growth × maturity' }));
-    fitDiv.appendChild(el('p', { text: 'Fitted, not assumed: pooled log-log OLS over the ' + F.n + ' live-token protocols with a positive market cap (' + F.df + ' df), outcome ln(market cap), predictor ln(TVL) only — the additive test kept no category term, so every category shares one size curve. Growth and maturity stay the radar-2 terms (a fitted growth coefficient did worse held out).' }));
+    fitDiv.appendChild(el('p', { text: 'Fitted, not assumed: pooled log-log OLS over the ' + F.n + ' live-token protocols with a positive market cap (' + F.df + ' df), outcome ln(market cap), predictor ln(TVL) only — no category term survived the additive test, so every category shares one size curve. Growth and maturity stay the radar-2 terms.' }));
     var coefRows = [['Intercept', [F.intercept.toFixed(6), 'num']], ['Slope on ln(TVL)', [F.slope.toFixed(6), 'num']]];
     fitDiv.appendChild(miniTable('Fitted coefficients (ln points). No category term survived the additive test, so there is no per-category effect.', ['Term', 'Coefficient'], coefRows));
     var multRows = [];
@@ -398,47 +404,53 @@
       F.horse_race.map(function (h) {
         return [h.variant, [h.loo_median.toFixed(4), 'num'], [h.loo_rmse.toFixed(4), 'num'], [h.split_median.toFixed(4), 'num']];
       })));
-    fitDiv.appendChild(el('p', { text: 'Held-out evidence: LOO median |ln err| ' + F.loo_median.toFixed(4) + ', LOO RMSE ' + F.loo_rmse.toFixed(4) + ', 70/30 split median |ln err| ' + F.split_median.toFixed(4) + ' (seed ' + A.split_seed + ', test = first 38 of the seeded shuffle), R² ' + F.r2.toFixed(4) + ', residual SD ' + F.resid_sd.toFixed(4) + '. P10–P90 coverage ' + (F.loo_coverage * 100).toFixed(1) + '% (LOO) and ' + (F.split_coverage * 100).toFixed(1) + '% (split) against a target of 80%. Honest limit: the fit is weak in absolute terms (R² ' + F.r2.toFixed(2) + '; a typical live token’s market cap is mispredicted by a factor of e^' + F.loo_median.toFixed(2) + ' ≈ ' + Math.exp(F.loo_median).toFixed(1) + ' at the LOO median). It beats the median model; it does not predict market cap precisely.' }));
-    // --- walk-forward + ablation (radar-4) ---
+    fitDiv.appendChild(el('p', { text: 'Held-out evidence: LOO median |ln err| ' + F.loo_median.toFixed(4) + ', LOO RMSE ' + F.loo_rmse.toFixed(4) + ', 70/30 split median |ln err| ' + F.split_median.toFixed(4) + ' (seed ' + A.split_seed + ', test = first 38 of the seeded shuffle), R² ' + F.r2.toFixed(4) + ', residual SD ' + F.resid_sd.toFixed(4) + '. P10–P90 coverage ' + (RH.loo_p1090 * 100).toFixed(1) + '% (LOO) and ' + (RH.wf_p1090 * 100).toFixed(1) + '% (walk-forward) against a target of 80% — the walk-forward figure misses it, and the stated coverage is the measured walk-forward number, not the target. Honest limit: the fit is weak in absolute terms (R² ' + F.r2.toFixed(2) + '; a typical live token’s market cap is mispredicted by a factor of e^' + F.loo_median.toFixed(2) + ' ≈ ' + Math.exp(F.loo_median).toFixed(1) + ' at the LOO median). It beats the median model; it does not predict market cap precisely.' }));
     var WF = F.walk_forward;
-    fitDiv.appendChild(el('p', { text: 'Walk-forward: the ' + WF.n + ' live-token protocols with a listed date (' + WF.n_null_excluded + ' record no date and are excluded, never imputed; ' + WF.earliest + ' to ' + WF.latest + ') are ordered oldest first. Fitting on the oldest ' + WF.folds[0].train + ' and testing the ' + WF.folds[0].test + ' newest gives median |ln err| ' + WF.folds[0].median.toFixed(4) + ' (coverage ' + (WF.folds[0].coverage * 100).toFixed(1) + '%); fitting on the oldest ' + WF.folds[1].train + ' and testing the ' + WF.folds[1].test + ' newest gives ' + WF.folds[1].median.toFixed(4) + ' (coverage ' + (WF.folds[1].coverage * 100).toFixed(1) + '%). Pooled over both folds (' + (WF.folds[0].test + WF.folds[1].test) + ' test predictions; the 15 newest are counted in both folds) the median is ' + WF.pooled_median.toFixed(4) + ' (coverage ' + (WF.pooled_coverage * 100).toFixed(1) + '%). The comparable leave-one-out median on the same implied basis (clamped multiple) is ' + WF.loo_implied_median.toFixed(4) + '.' }));
-    fitDiv.appendChild(el('p', { text: 'The per-term additive table is above the board, in Out-of-sample evidence.' }));
+    fitDiv.appendChild(el('p', { text: 'Walk-forward: the ' + WF.n + ' dated live-token protocols (' + WF.n_null_excluded + ' undated, excluded, never imputed; ' + WF.earliest + ' to ' + WF.latest + ') ordered oldest first. Fit on the oldest ' + WF.folds[0].train + ', test the ' + WF.folds[0].test + ' newest: median |ln err| ' + WF.folds[0].median.toFixed(4) + ' (coverage ' + (WF.folds[0].coverage * 100).toFixed(1) + '%); fit on the oldest ' + WF.folds[1].train + ', test the ' + WF.folds[1].test + ' newest: ' + WF.folds[1].median.toFixed(4) + ' (coverage ' + (WF.folds[1].coverage * 100).toFixed(1) + '%). Pooled (' + (WF.folds[0].test + WF.folds[1].test) + ' predictions; the 15 newest count in both folds): ' + WF.pooled_median.toFixed(4) + ' (coverage ' + (WF.pooled_coverage * 100).toFixed(1) + '%). Comparable leave-one-out median on the same implied basis: ' + WF.loo_implied_median.toFixed(4) + '.' }));
+    fitDiv.appendChild(el('p', { text: 'The per-term additive table is below the board, in Out-of-sample evidence.' }));
 
-    // --- launch odds ---
     var oddsDiv = document.getElementById('methodOdds');
     oddsDiv.appendChild(el('h3', { text: 'Launch odds and expected value' }));
-    oddsDiv.appendChild(el('p', { text: 'Odds measure resemblance to protocols that already record a token; the snapshot holds no launch event, so no true launch rate can be estimated. Logistic regression on all ' + DATA.ledger.total + ' protocols, outcome “records a token” (' + O.live_share.toFixed(4) + ' do): logit(odds) = ' + O.intercept.toFixed(6) + ' + ' + O.age.toFixed(6) + ' × ln(age) ' + (O.growth >= 0 ? '+' : '−') + ' ' + Math.abs(O.growth).toFixed(6) + ' × growth + ' + O.peer.toFixed(6) + ' × peer logit. Growth is the 7-day change clamped to −40%…+60%, divided by 100; the peer logit is the live share in the protocol’s own category, shrunk toward the overall share with a prior weight of ' + O.prior_weight + ' protocols. Odds are never a forecast that a token will launch, and implied value is never a promised payout.' }));
-    oddsDiv.appendChild(el('p', { text: 'Growth is negative as fitted: holding age and peer rate fixed, faster growth lowers odds — the snapshot’s fast growers are young pre-token protocols, established live-token protocols grow slowly. AUC ' + O.auc.toFixed(4) + '; mean odds ' + O.mean_live.toFixed(3) + ' (records a token) vs ' + O.mean_pre.toFixed(3) + ' (pre-token). Brier ' + O.brier.toFixed(4) + ' (base rate ' + (O.live_share * (1 - O.live_share)).toFixed(4) + '), ten-fold ' + O.brier_tenfold.toFixed(4) + ', walk-forward ' + O.brier_wf.toFixed(4) + '. Implied value = fitted value × launch odds — the expected value of a launch. Implied value is the entry’s own claim. The board is ranked by implied value; the fitted value stays visible as the value-if-launches column.' }));
+    oddsDiv.appendChild(el('p', { text: 'Odds measure resemblance to protocols that already record a token; the snapshot holds no launch event, so no true launch rate can be estimated. Logistic regression on all ' + DATA.ledger.total + ' protocols, outcome “records a token” (' + O.live_share.toFixed(4) + ' do): logit(odds) = ' + O.intercept.toFixed(6) + ' + ' + O.peer.toFixed(6) + ' × peer logit + ' + O.age_sqrt.toFixed(6) + ' × sqrt(age)/10 ' + (O.growth >= 0 ? '+' : '−') + ' ' + Math.abs(O.growth).toFixed(6) + ' × growth + ' + O.tvl.toFixed(6) + ' × ln(TVL) + ' + O.chains.toFixed(6) + ' × ln(chains). Age is square-rooted, not logged: the log form saturates too fast for young protocols, and the square-root form lowers Brier in both blind tests. Growth is the 7-day change clamped to −40%…+60%, divided by 100; the peer logit is the live share in the protocol’s own category, shrunk toward the overall share with a prior weight of ' + O.prior_weight + ' protocols; an undated protocol counts as fully mature (' + O.unknown_age_days + ' days), because undated protocols record a token at the same rate as the oldest dated quartile. Odds are never a forecast that a token will launch, and implied value is never a promised payout.' }));
+    oddsDiv.appendChild(el('p', { text: 'Growth is negative as fitted: fast growers are young pre-token protocols; established live-token protocols grow slowly. AUC ' + O.auc.toFixed(4) + '; mean odds ' + O.mean_live.toFixed(3) + ' (records a token) vs ' + O.mean_pre.toFixed(3) + ' (pre-token). Brier ' + O.brier.toFixed(4) + ' (base rate ' + (O.live_share * (1 - O.live_share)).toFixed(4) + '), ten-fold ' + O.brier_tenfold.toFixed(4) + ', walk-forward ' + O.brier_wf.toFixed(4) + '. Implied value = fitted value × launch odds — the expected value of a launch. Implied value is the entry’s own claim. The board is ranked by implied value; the fitted value stays visible as the value-if-launches column.' }));
+    (function () {
+      var dec = O.decomposition;
+      var r3 = null, r1 = null;
+      dec.forEach(function (d) { if (d.rank === 3) r3 = d; if (d.rank === 1) r1 = d; });
+      if (r3) {
+        var row3 = bySlug(r3.slug);
+        var totF = 0, totI = 0;
+        DATA.rows.forEach(function (r) { totF += r.value_if_launches_usd; totI += r.implied_value_usd; });
+        oddsDiv.appendChild(el('p', { text: 'Why the biggest protocol is not rank 1: ' + r3.name + ' has the largest fitted value (' + money.format(row3 ? row3.value_if_launches_usd : 0) + ') but odds ' + r3.odds.toFixed(3) + ' — its peer term is ' + r3.peer.toFixed(2) + ' logit (peer rate ' + (row3 ? (row3.peer_shrunk * 100).toFixed(1) : '—') + '% after shrinkage, vs ' + (O.live_share * 100).toFixed(1) + '% overall), because few of its category peers record a token. Age (' + (r3.age >= 0 ? '+' : '') + r3.age.toFixed(2) + '), size (' + (r3.tvl >= 0 ? '+' : '') + r3.tvl.toFixed(2) + ') and chains (' + (r3.chains >= 0 ? '+' : '') + r3.chains.toFixed(2) + ') cannot offset that drag. No odds are forced up: the low odds are the data’s.' }));
+        oddsDiv.appendChild(el('p', { text: 'Odds drag on the whole board: total implied value ' + money.format(totI) + ' against total fitted value ' + money.format(totF) + ' — odds remove ' + Math.round((1 - totI / totF) * 100) + '% of the fitted total (median odds ' + DATA.median_odds.toFixed(3) + '). Rank 1 is ' + (r1 ? r1.name : '') + ' at ' + money.format(DATA.max_ev.value) + ' implied. The gap is the model saying most pre-token protocols will never launch, not a discount applied afterwards.' }));
+      }
+    })();
+    oddsDiv.appendChild(el('p', { text: 'Interval calibration: the printed P10–P90 range is stated at its measured walk-forward coverage, ' + (RH.wf_p1090 * 100).toFixed(1) + '% (LOO ' + (RH.loo_p1090 * 100).toFixed(1) + '%), not at the 80% target, which the walk-forward test misses. Widening the range until it hit 80% walk-forward would need a ±1.33σ interval, which is no longer a P10–P90 range; the honest statement is the measured one.' }));
 
-    // --- bootstrap ---
     var bootDiv = document.getElementById('methodBoot');
     bootDiv.appendChild(el('h3', { text: 'Uncertainty — bootstrap intervals' }));
     var medRankW = median(DATA.rows.map(function (r) { return r.rank_hi - r.rank_lo; }));
     var medIntW = median(DATA.rows.map(function (r) { return r.p90_usd - r.p10_usd; }));
-    bootDiv.appendChild(el('p', { text: 'Every row carries a P10–P90 interval and a rank range from a deterministic bootstrap: ' + A.bootstrap_b + ' refits (seed ' + A.bootstrap_seed + '), each resampling the ' + F.n + ' live-token rows with replacement, refitting the 2-parameter OLS and re-ranking all ' + DATA.rows.length + ' board rows. Growth and maturity are held fixed; odds are not refit. P10 is the 20th smallest of the 200 values, P90 the 180th; the rank range is the lowest and highest rank across the refits. The intervals are wide — median rank-range width ' + medRankW + ' places, median P90−P10 width ' + fmtUsd(medIntW) + ' — shown as computed, never shrunk: the width is the finding. A row at a clamp bound in nearly every refit has P10 = P90 = the clamped value and is shown as “stable in N/200 refits”.' }));
+    bootDiv.appendChild(el('p', { text: 'Every row carries a P10–P90 interval and a rank range from a deterministic bootstrap: ' + A.bootstrap_b + ' refits (seed ' + A.bootstrap_seed + '), each resampling the ' + F.n + ' live-token rows with replacement, refitting the 2-parameter OLS and re-ranking all ' + DATA.rows.length + ' board rows. Growth and maturity are held fixed; odds are not refit. P10 is the 20th smallest of the 200 values, P90 the 180th; the rank range is the lowest and highest rank across the refits. Intervals are wide — median rank-range width ' + medRankW + ' places, median P90−P10 width ' + fmtUsd(medIntW) + ' — shown as computed, never shrunk. A row at a clamp bound in nearly every refit has P10 = P90, shown as “stable” on the board; the refit count is in the detail view.' }));
 
-    // --- farm netting ---
     var farmDiv = document.getElementById('methodFarm');
     farmDiv.appendChild(el('h3', { text: 'Farm plans and their netting' }));
     var costs = DATA.rows.map(function (r) { return r.farm_cost_usd; });
     var dph = DATA.rows.map(function (r) { return r.dollars_per_hour; });
-    farmDiv.appendChild(el('p', { text: 'Each plan is 7 steps shaped by the protocol’s category family, primary chain, capital tier ($250 / $150 / $100 / $50 from TVL) and hold time (60 / 45 / 30 days from age). Netting is computed from tier and hold, never by parsing the step text: gas = $3 + 2 × gas core ($8 at $150+ capital, $4 below) + $2 per week of hold; opportunity cost = locked capital at ' + (A.opportunity_rate * 100).toFixed(0) + '% per year + the farmer’s active hours at $' + A.labor_rate + '/h (radar-7: the hours were free before, which overstated FARM — charging them cuts FARM to ' + DATA.verdict_counts.FARM + '); total cost = gas + opportunity (range ' + fmtUsd(Math.min.apply(null, costs)) + '–' + fmtUsd(Math.max.apply(null, costs)) + '). Break-even share = total cost ÷ expected value. Verdict: FARM when the share is at most ' + A.verdict_farm + ' (expected value covers cost at least 100,000×), THIN at most ' + A.verdict_thin + ' (at least 10,000×), else SKIP. $/hour assumes the farmer captures ' + (A.allocation_share * 100).toFixed(3) + '% of expected value: proceeds = expected value × ' + (A.allocation_share * 100).toFixed(3) + '%, net = proceeds − total cost, $/hour = net ÷ active hours (hold days excluded). $/hour is a screening figure under that assumption, not a promised income — change it in the sandbox and it moves. Median $/hour is $' + Math.round(median(dph)).toLocaleString() + ' (range $' + Math.round(Math.min.apply(null, dph)).toLocaleString() + ' to $' + Math.round(Math.max.apply(null, dph)).toLocaleString() + ').' }));
+    farmDiv.appendChild(el('p', { text: 'Each plan is 7 steps shaped by category family, primary chain, capital tier ($250/$150/$100/$50 from TVL) and hold time (60/45/30 days from age). Netting comes from tier and hold, never from parsing the step text: gas = $3 + 2 × gas core ($8 at $150+ capital, $4 below) + $2 per week of hold; opportunity cost = locked capital at ' + (A.opportunity_rate * 100).toFixed(0) + '% per year + the farmer’s active hours at $' + A.labor_rate + '/h (radar-7: the hours were free before, which overstated FARM — charging them cuts FARM to ' + DATA.verdict_counts.FARM + '); total cost = gas + opportunity (range ' + fmtUsd(Math.min.apply(null, costs)) + '–' + fmtUsd(Math.max.apply(null, costs)) + '). Break-even share = total cost ÷ expected value. Verdict: FARM when the share is at most ' + A.verdict_farm + ' (expected value covers cost at least 100,000×), THIN at most ' + A.verdict_thin + ' (at least 10,000×), else SKIP. $/hour assumes the farmer captures ' + (A.allocation_share * 100).toFixed(3) + '% of expected value: net = proceeds − total cost, $/hour = net ÷ active hours (hold days excluded). $/hour is a screening figure, not a promised income. Median $/hour is $' + Math.round(median(dph)).toLocaleString() + ' (range $' + Math.round(Math.min.apply(null, dph)).toLocaleString() + ' to $' + Math.round(Math.max.apply(null, dph)).toLocaleString() + ').' }));
 
-    // --- ledger ---
     var ledDiv = document.getElementById('methodLedger');
     ledDiv.appendChild(el('h3', { text: 'Ledger' }));
-    ledDiv.appendChild(el('p', { text: 'The ledger above accounts for all ' + DATA.ledger.total + ' snapshot protocols: ranked, excluded with reasons, and live. Nothing was silently dropped.' }));
+    ledDiv.appendChild(el('p', { text: 'The ledger above accounts for all ' + DATA.ledger.total + ' snapshot protocols. Nothing was silently dropped.' }));
 
-    // --- D1r fallback ---
     var fbDiv = document.getElementById('methodFallback');
     fbDiv.appendChild(el('h3', { text: 'The radar-2 fallback (D1r) — retained, not deleted' }));
     var multList = Object.keys(DATA.category_multiples).sort().map(function (c) {
       return c + ' ' + DATA.category_multiples[c];
     }).join(', ');
-    fbDiv.appendChild(el('p', { text: 'If the fitted model ever fails its recompute check, the build falls back to this radar-2 median model: implied = TVL × category multiple × size × growth × maturity. Category multiples (live-token medians, n ≥ 5, clamped 0.08–0.60; otherwise the overall median ' + DATA.model.fallback_multiple + '): ' + multList + '. Size (' + DATA.model.size_reference_usd / 1000000 + 'M ÷ TVL)^' + DATA.model.size_exponent + ', clamped to ' + DATA.model.size_floor + '–' + DATA.model.size_cap + '; growth 1 + ' + DATA.model.growth_weight + ' × clamp(7-day change, ' + DATA.model.growth_floor + '%, +' + DATA.model.growth_cap + '%) ÷ 100; maturity ' + DATA.model.maturity_floor + ' + ' + DATA.model.maturity_range + ' × min(age, ' + DATA.model.maturity_days + ' days) ÷ ' + DATA.model.maturity_days + ', unknown age uses ' + DATA.model.unknown_age_days + ' days. The fitted model beat this fallback on honest leave-one-out error (' + F.horse_race[1].loo_median.toFixed(4) + ' vs ' + F.horse_race[0].loo_median.toFixed(4) + '), which is why it is primary.' }));
+    fbDiv.appendChild(el('p', { text: 'If the fitted model ever fails its recompute check, the build falls back to this radar-2 median model: implied = TVL × category multiple × size × growth × maturity. Category multiples (live-token medians, n ≥ 5, clamped 0.08–0.60; otherwise the overall median ' + DATA.model.fallback_multiple + '): ' + multList + '. Size (' + DATA.model.size_reference_usd / 1000000 + 'M ÷ TVL)^' + DATA.model.size_exponent + ', clamped ' + DATA.model.size_floor + '–' + DATA.model.size_cap + '; growth 1 + ' + DATA.model.growth_weight + ' × clamp(7-day change, ' + DATA.model.growth_floor + '%, +' + DATA.model.growth_cap + '%) ÷ 100; maturity ' + DATA.model.maturity_floor + ' + ' + DATA.model.maturity_range + ' × min(age, ' + DATA.model.maturity_days + ' days) ÷ ' + DATA.model.maturity_days + ', unknown age ' + DATA.model.unknown_age_days + ' days. The fitted model beat this fallback on honest leave-one-out error (' + F.horse_race[1].loo_median.toFixed(4) + ' vs ' + F.horse_race[0].loo_median.toFixed(4) + '), which is why it is primary.' }));
   }
 
-  // --- sandbox (D13) ---
   var ALLOC_STEPS = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1]; // percent
   var sandbox = { slope: DATA.fit.slope, allocIdx: 3 };
   function sandboxGrowthMaturity(row) {
@@ -486,9 +498,9 @@
   }
   function initSandbox() {
     document.getElementById('sandboxNote').textContent =
-      'The sliders recompute the displayed values only; the submitted board is the locked ' + DATA.model_version + ' board, and no slider rewrites it or persists into board.json. Verdicts are set by the break-even ratio and do not move with allocation; net $/hour does.';
+      'The sliders recompute the displayed values only; the locked ' + DATA.model_version + ' board is unchanged, and no slider rewrites it.';
     document.getElementById('sandboxLock').textContent =
-      'Locked board: implied value (fitted × odds) at slope b = ' + DATA.fit.slope.toFixed(6) + ', 0.01% allocation for $/hour. The sandbox shows the same rows under a different slope or allocation.';
+      'Locked board: implied value (fitted × odds) at slope b = ' + DATA.fit.slope.toFixed(6) + ', 0.01% allocation for $/hour.';
     var slopeEl = document.getElementById('slopeSlider');
     var allocEl = document.getElementById('allocSlider');
     slopeEl.value = String(DATA.fit.slope);
@@ -498,7 +510,6 @@
     renderSandbox();
   }
 
-  // --- compare (CSV export dropped: dashboard byte budget, D13) ---
   function initCompare() {
     var a = document.getElementById('cmpA'), b = document.getElementById('cmpB');
     DATA.rows.forEach(function (r) {
@@ -543,9 +554,6 @@
   function openDetail(slug) {
     var row = bySlug(slug);
     if (!row) {
-      // Unknown #p= slug: never open a half dialog and never leave a stale
-      // selection behind — drop it from the state and the hash so the page
-      // stays exactly as it was (board visible, filters unchanged).
       if (state.selected) { state.selected = null; writeHash(); }
       if (dialog.open) dialog.close();
       renderRows();
@@ -577,7 +585,7 @@
         el('div', null, el('span', { text: 'Value if launches' }), el('b', { text: money.format(row.value_if_launches_usd) }))
       ),
       el('p', { class: 'words-eq', text: 'TVL ' + fmtUsd(row.tvl_usd) + ' × ' + m.fitted_multiple + ' (fitted multiple, slope ' + m.slope + ') × ' + m.growth_multiplier + ' (growth) × ' + m.maturity_multiplier + ' (maturity) = ' + money.format(row.value_if_launches_usd) }),
-      el('p', { text: multLine + '. The curve is log mcap = ' + m.intercept + ' + ' + m.slope + ' × ln(TVL), fitted to the ' + DATA.fit.n + ' live-token protocols; the D1r median multiple for this category (' + m.d1r_multiple + ') is the fallback. ' + growthWord + ' Maturity multiplier ' + m.maturity_multiplier + ' rewards ' + fmtAge(row.age_days) + ' of life with no token on record. The fit is weak in absolute terms (R² ' + DATA.fit.r2.toFixed(2) + ') — see Methodology.' })
+      el('p', { text: multLine + '. The curve is log mcap = ' + m.intercept + ' + ' + m.slope + ' × ln(TVL), fitted to the ' + DATA.fit.n + ' live-token protocols; the D1r median multiple for this category (' + m.d1r_multiple + ') is the fallback. ' + growthWord + ' The fit is weak in absolute terms (R² ' + DATA.fit.r2.toFixed(2) + ') — see Methodology.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Anchored by traded tokens' }),
@@ -591,7 +599,7 @@
       el('h3', { text: 'Launch odds and implied value' }),
       el('p', { text: 'Implied value = fitted value × launch odds — the expected value of a launch. Implied value is the entry’s own claim. For this row: ' + money.format(row.implied_value_usd) + ' = ' + money.format(row.value_if_launches_usd) + ' (value if launches) × odds ' + fmtOdds(row.odds) + '.' }),
       el('p', { text: 'Odds ' + fmtOdds(row.odds) + ' — a peer-resemblance score, not a forecast that a token will launch.' }),
-      el('p', { text: 'Odds inputs: ln(age ' + (row.age_days === null ? '365 (unknown)' : row.age_days + 'd') + ') = ' + Math.log(row.age_days === null ? 365 : row.age_days).toFixed(3) + '; growth term ' + (row.change_7d === null ? '0' : (Math.min(60, Math.max(-40, row.change_7d)) / 100).toFixed(3)) + '; peer rate in this category ' + (row.peer_shrunk * 100).toFixed(1) + '% (shrunk), peer logit ' + row.peer_logit.toFixed(3) + '. The snapshot holds no launch event, so no true launch rate can be estimated.' })
+      el('p', { text: 'Odds inputs: sqrt(age ' + (row.age_days === null ? '1095 (unknown, fully mature)' : row.age_days + 'd') + ')/10 = ' + (Math.sqrt(row.age_days === null ? 1095 : row.age_days) / 10).toFixed(3) + '; growth term ' + (row.change_7d === null ? '0' : (Math.min(60, Math.max(-40, row.change_7d)) / 100).toFixed(3)) + '; ln(TVL) = ' + Math.log(row.tvl_usd).toFixed(3) + '; ln(chains) = ' + Math.log(Math.min((row.chains || []).length, 10)).toFixed(3) + '; peer rate in this category ' + (row.peer_shrunk * 100).toFixed(1) + '% (shrunk), peer logit ' + row.peer_logit.toFixed(3) + '. The snapshot holds no launch event, so no true launch rate can be estimated.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Uncertainty (bootstrap)' }),
@@ -618,12 +626,6 @@
   function initHeader() {
     document.getElementById('asof').textContent = 'Snapshot ' + DATA.as_of;
     document.getElementById('modelVer').textContent = 'Model ' + DATA.model_version;
-    document.getElementById('fact-watch').textContent = DATA.watchlist_size + ' / ' + DATA.watchlist_size;
-    document.getElementById('fact-board').textContent = String(DATA.board_size);
-    document.getElementById('fact-early').textContent = String(DATA.early_size);
-    document.getElementById('fact-live').textContent = String(DATA.live_size);
-    document.getElementById('formula').textContent =
-      'implied = fitted × odds; fitted = TVL × fitted multiple × growth × maturity — ' + DATA.model_version + ', snapshot ' + DATA.as_of + '.';
     document.getElementById('src').textContent =
       'Source: ' + (DATA.source ? DATA.source.split(' ')[0] : 'DefiLlama') + ' protocol index, snapshot ' + DATA.as_of + '.';
   }
@@ -647,6 +649,7 @@
   initHeader();
   initControls();
   renderKpi();
+  renderSummary();
   renderEvidence();
   renderLedger();
   renderMethod();

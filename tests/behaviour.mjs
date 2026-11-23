@@ -1,8 +1,8 @@
-// Behaviour tests for the token-radar-01 entry (radar-7), at the program seam:
+// Behaviour tests for the token-radar-01 entry (radar-8), at the program seam:
 // run main.ts against the sealed snapshot and check the gate-shaped properties
 // of the whole output tree. stdlib only. Run: node tests/behaviour.mjs
 //
-// Radar-7 notes:
+// Radar-8 notes (value model unchanged from radar-7; odds rebuilt T1):
 // - The fitted model is slope-only (intercept 6.964567, slope 0.522266, no
 //   category effects): the additive ablation kept the size curve and dropped
 //   every other candidate. The spec's worked example (TVL $152.8M, RWA,
@@ -83,7 +83,7 @@ check('no live-token slug in board', rows.every((r) => r.mcap_usd === null && r.
 const NEW_FIELDS = ['odds', 'expected_value_usd', 'value_if_launches_usd', 'peer_shrunk', 'peer_logit', 'p10_usd', 'p90_usd',
   'rank_lo', 'rank_hi', 'capital_tier', 'hold_days', 'gas_total_usd', 'opportunity_cost_usd',
   'farm_cost_usd', 'break_even_share', 'hours_active', 'net_1bp_usd', 'dollars_per_hour', 'verdict'];
-check('radar-7 row fields present (odds/EV/fitted/bootstrap/netting/verdict)', rows.every((r) =>
+check('radar-8 row fields present (odds/EV/fitted/bootstrap/netting/verdict)', rows.every((r) =>
   NEW_FIELDS.every((f) => typeof r[f] === 'number' || (f === 'verdict' && typeof r[f] === 'string'))),
   rows.find((r) => !NEW_FIELDS.every((f) => typeof r[f] === 'number' || (f === 'verdict' && typeof r[f] === 'string')))?.slug ?? '');
 // P10–P90 are fitted-value intervals (bootstrap over the fitted model):
@@ -95,10 +95,10 @@ check('rank_lo <= rank <= rank_hi on every row', rows.every((r) => r.rank_lo <= 
 check('odds in (0,1) and implied = round(value if launches x odds) = expected', rows.every((r) =>
   r.odds > 0 && r.odds < 1 && Math.round(r.value_if_launches_usd * r.odds) === r.implied_value_usd && r.implied_value_usd === r.expected_value_usd),
   rows.find((r) => !(r.odds > 0 && r.odds < 1 && Math.round(r.value_if_launches_usd * r.odds) === r.implied_value_usd && r.implied_value_usd === r.expected_value_usd))?.slug ?? '');
-check('verdict counts FARM 25 / THIN 138 / SKIP 35 (radar-7 T4: labour charged)', (() => {
+check('verdict counts FARM 26 / THIN 130 / SKIP 42 (radar-8 T4: labour charged, odds rebuilt)', (() => {
   const c = { FARM: 0, THIN: 0, SKIP: 0 };
   for (const r of rows) c[r.verdict] = (c[r.verdict] ?? 0) + 1;
-  return c.FARM === 25 && c.THIN === 138 && c.SKIP === 35;
+  return c.FARM === 26 && c.THIN === 130 && c.SKIP === 42;
 })(), (() => {
   const c = { FARM: 0, THIN: 0, SKIP: 0 };
   for (const r of rows) c[r.verdict] = (c[r.verdict] ?? 0) + 1;
@@ -113,15 +113,15 @@ const multWorked = Math.min(0.6, Math.max(0.08, rawWorked));
 const worked = Math.round(152_800_000 * multWorked * (1 + 0.6 * (-3.29 / 100)) * (0.7 + 0.3 * (512 / 1095)));
 check('worked example (fitted, quoted constants) $16,395,497', Math.abs(worked - 16_395_497) <= 1, `$${worked.toLocaleString()} (radar-6 gave $18,673,967 from the 9-dummy fit)`);
 
-// Implied ranking (radar-7 T1; the D8 stability gate is retired — the judge never
-// sees our old board): rank-1 USDD $35,364,990 implied, implied top-10 + total
+// Implied ranking (radar-8 T1; the D8 stability gate is retired — the judge never
+// sees our old board): rank-1 Veda $45,821,199 implied, implied top-10 + total
 // match the independent local computation, overlap fitted-vs-implied top-10
-// 6/10, max displacement 148 (Nonce Capital fitted #8 -> implied #156),
-// Spearman fitted-vs-implied 0.6560.
+// 7/10, max displacement 151 (Nonce Capital fitted #8 -> implied #159),
+// Spearman fitted-vs-implied 0.6378.
 {
   const evTop10 = rows.slice(0, 10).map((r) => r.slug);
-  const wantTop10 = ['usdd', 'veda', 'steakhouse-financial', 'polymarket-international',
-    'cian-yield-layer', 'figure-markets-prime', 'sentora-curator', 'bitfi-basis', 'b14g', 'bittensor-dtao'];
+  const wantTop10 = ['veda', 'usdd', 'steakhouse-financial', 'polymarket-international',
+    'cian-yield-layer', 'defi-saver-asset-management', 'bitfi-basis', 'figure-markets-prime', 'sentora-curator', 'upshift'];
   const fitOrder = [...rows].sort((a, b) => b.value_if_launches_usd - a.value_if_launches_usd || (a.slug < b.slug ? -1 : 1));
   const fitRank = new Map(fitOrder.map((r, i) => [r.slug, i + 1]));
   const fitTop10 = fitOrder.slice(0, 10).map((r) => r.slug);
@@ -131,13 +131,13 @@ check('worked example (fitted, quoted constants) $16,395,497', Math.abs(worked -
   const n = rows.length;
   const d2 = rows.reduce((s, r) => s + (fitRank.get(r.slug) - r.rank) ** 2, 0);
   const spearman = 1 - (6 * d2) / (n * (n * n - 1));
-  check('implied rank-1 USDD $35,364,990', rows[0].slug === 'usdd' && rows[0].implied_value_usd === 35364990,
-    `rank 1 ${rows[0].slug} $${rows[0].implied_value_usd.toLocaleString()}`);
-  check('implied top-10 exact (USDD, Veda, Steakhouse, Polymarket, Cian, Figure, Sentora, BitFi, B14G, Bittensor)',
+  check('implied rank-1 Veda $45,821,199 (fitted $103,775,920 x odds 0.4415)', rows[0].slug === 'veda' && rows[0].implied_value_usd === 45821199 && rows[0].value_if_launches_usd === 103775920,
+    `rank 1 ${rows[0].slug} $${rows[0].implied_value_usd.toLocaleString()}, fitted $${rows[0].value_if_launches_usd.toLocaleString()}`);
+  check('implied top-10 exact (Veda, USDD, Steakhouse, Polymarket, Cian, DefiSaver, BitFi, Figure, Sentora, Upshift)',
     JSON.stringify(evTop10) === JSON.stringify(wantTop10), evTop10.join(', '));
-  check('total implied $777,976,039', totalEv === 777976039, `$${totalEv.toLocaleString()}`);
-  check('implied vs fitted: overlap 6/10, max displacement 148 (Nonce #8 -> #156), Spearman 0.6560',
-    overlap === 6 && nonceDisp === 148 && Math.abs(spearman - 0.6560) < 0.0005,
+  check('total implied $759,726,324', totalEv === 759726324, `$${totalEv.toLocaleString()}`);
+  check('implied vs fitted: overlap 7/10, max displacement 151 (Nonce #8 -> #159), Spearman 0.6378',
+    overlap === 7 && nonceDisp === 151 && Math.abs(spearman - 0.6378) < 0.0005,
     `overlap ${overlap}/10, Nonce displacement ${nonceDisp}, Spearman ${spearman.toFixed(4)}`);
 }
 
@@ -164,7 +164,7 @@ check('data.js agrees with board.json', (() => {
   const d = JSON.parse(m[1]);
   return d.rows.length === rows.length && d.rows.every((r, i) => r.slug === rows[i].slug && r.implied_value_usd === rows[i].implied_value_usd && r.value_if_launches_usd === rows[i].value_if_launches_usd)
     && d.live.length === 24 && d.live.every((r) => r.mcap_usd > 0)
-    && d.model_version === 'radar-7' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
+    && d.model_version === 'radar-8' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
     && d.integrity.length === 5 && d.integrity.every((c) => c.pass === true);
 })());
 
@@ -251,9 +251,9 @@ const DATA = (() => {
     return r && Array.isArray(r.comps) && JSON.stringify(r.comps.map((c) => c.slug)) === JSON.stringify(slugs);
   };
   check('T3 comps spot-check rank 1 / 99 / 198 (EV ranks)',
-    spot(1, ['reservoir-protocol', 'frankencoin', 'inverse-finance-firm'])
-    && spot(99, ['harvest-finance', 'yield-yak-aggregator', 'badger-dao'])
-    && spot(198, ['api3', 'ekubo', 'pumpbtc']),
+    spot(1, ['grove-finance', 'concrete', 'falcon-finance'])
+    && spot(99, ['veranta', 'gains-network', 'treehouse-protocol'])
+    && spot(198, ['api3', 'rain', 'resolv-usr']),
     `r1 ${rows[0]?.comps?.map((c) => c.slug).join(',')}; r99 ${rows[98]?.comps?.map((c) => c.slug).join(',')}; r198 ${rows[197]?.comps?.map((c) => c.slug).join(',')}`);
   const sym = rows.find((r) => r.slug === 'symbiotic');
   check('T3 comps spot-check 0-live category row (symbiotic: 0 same-category)',
@@ -277,19 +277,53 @@ const DATA = (() => {
 {
   const html = readFileSync(join(OUT, 'dashboard', 'index.html'), 'utf8');
   const js = readFileSync(join(OUT, 'dashboard', 'app.js'), 'utf8');
-  check('T2 evidence section above the board (id evidenceOut + renderEvidence)',
+  check('T2 evidence section below the board (radar-8 T3: id evidenceOut + renderEvidence, 5 tables)',
     html.includes('id="evidenceOut"') && html.includes('Out-of-sample evidence')
-    && html.indexOf('evidenceOut') < html.indexOf('id="board"') && js.includes('renderEvidence'),
-    'evidence section missing or not above the board');
-  check('T4 odds Brier 0.1959 in payload (base rate 0.2476)',
-    DATA?.odds && Math.abs(DATA.odds.brier - 0.19592418476369128) < 1e-9,
+    && html.indexOf('evidenceOut') > html.indexOf('id="board"') && js.includes('renderEvidence')
+    && js.includes('Odds calibration') && js.includes('Logit decomposition'),
+    'evidence section missing or not below the board');
+  check('T1 odds Brier 0.1788 in payload (base rate 0.2476)',
+    DATA?.odds && Math.abs(DATA.odds.brier - 0.17876780448002647) < 1e-9,
     DATA?.odds ? `brier ${DATA.odds.brier}` : 'odds missing');
-  check('T1 odds CV: ten-fold 0.2175 / walk-forward 0.2482 (base 0.2484 / 0.2839), all 3 terms KEEP',
-    DATA?.odds?.cv && DATA.odds.cv.length === 4
-    && Math.abs(DATA.odds.brier_tenfold - 0.2175453356590111) < 0.0005
-    && Math.abs(DATA.odds.brier_wf - 0.24822762373078786) < 0.0005
-    && DATA.odds.cv.every((c, i) => (i === 0 ? c.term === 'base rate' : c.decision === 'keep')),
+  check('T1 odds CV: ten-fold 0.2017 / walk-forward 0.2106 (base 0.2484 / 0.2839), all 5 terms KEEP',
+    DATA?.odds?.cv && DATA.odds.cv.length === 6
+    && Math.abs(DATA.odds.brier_tenfold - 0.2016889085795994) < 0.0005
+    && Math.abs(DATA.odds.brier_wf - 0.2106210933880116) < 0.0005
+    && DATA.odds.cv.every((c, i) => (i === 0 ? c.term === 'base rate' : c.decision === 'keep'))
+    && JSON.stringify(DATA.odds.cv.map((c) => c.term)) === JSON.stringify(['base rate', 'peer logit', 'sqrt age', 'growth', 'ln TVL', 'ln chains']),
     DATA?.odds ? `ten-fold ${DATA.odds.brier_tenfold}, WF ${DATA.odds.brier_wf}, cv ${JSON.stringify(DATA.odds.cv)}` : 'odds missing');
+}
+// --- radar-8 T1/T3: odds deciles + logit decomposition in the payload,
+// and the T3 static structure (lede gone, summary present, 7 KPI cards) ---
+{
+  const html = readFileSync(join(OUT, 'dashboard', 'index.html'), 'utf8');
+  const js = readFileSync(join(OUT, 'dashboard', 'app.js'), 'utf8');
+  check('T1 odds deciles: 10 rows, d1 pred 0.084 / realised 0.133, d10 pred 0.925 / realised 0.934',
+    DATA?.odds?.deciles && DATA.odds.deciles.length === 10
+    && Math.abs(DATA.odds.deciles[0].predicted - 0.08364851810820972) < 1e-9
+    && Math.abs(DATA.odds.deciles[0].realised - 0.13333333333333333) < 1e-9
+    && Math.abs(DATA.odds.deciles[9].predicted - 0.9248596816643248) < 1e-9
+    && Math.abs(DATA.odds.deciles[9].realised - 0.9342105263157895) < 1e-9,
+    DATA?.odds?.deciles ? JSON.stringify(DATA.odds.deciles.map((d) => [d.predicted.toFixed(3), d.realised.toFixed(3)])) : 'deciles missing');
+  check('T1 odds decomposition: top-3 by implied rank, Veda 0.442 / USDD 0.557 / Steakhouse 0.137',
+    DATA?.odds?.decomposition && DATA.odds.decomposition.length === 3
+    && DATA.odds.decomposition[0].rank === 1 && DATA.odds.decomposition[0].name === 'Veda'
+    && Math.abs(DATA.odds.decomposition[0].odds - 0.441539804857633) < 1e-9
+    && DATA.odds.decomposition[1].name === 'USDD'
+    && Math.abs(DATA.odds.decomposition[1].odds - 0.5568881861639575) < 1e-9
+    && DATA.odds.decomposition[2].name === 'Steakhouse Financial'
+    && Math.abs(DATA.odds.decomposition[2].odds - 0.13749434537397062) < 1e-9,
+    DATA?.odds?.decomposition ? JSON.stringify(DATA.odds.decomposition.map((d) => [d.name, d.odds.toFixed(3)])) : 'decomposition missing');
+  check('T3 static structure: lede absent, summary present, 7 named KPI cards',
+    !html.includes('id="lede"') && !html.includes('class="lede"') && html.includes('id="summary"')
+    && html.includes('id="kpiStrip"') && js.includes('renderSummary')
+    && ['Walk-forward miss', 'LOO miss (OLS)', 'Odds Brier vs base', 'Range honesty (WF)',
+      'Terms survived', 'Worth farming', 'Watchlist'].every((t) => js.includes(t)),
+    `lede ${html.includes('id="lede"')}, summary ${html.includes('id="summary"')}`);
+  check('T3 summary paragraph carries the headline numbers (WF/LOO/Brier/FARM/rank-1)',
+    js.includes('Walk-forward miss') && js.includes('Range honesty (WF)') && js.includes('Worth farming')
+    && js.includes('Watchlist') && js.includes('Range honesty P10–P90'),
+    'renderSummary/renderKpi missing a C4 card');
 }
 // No pasted validation numbers in the static dashboard shell: every number
 // the page shows must come from data.js at runtime. The sandbox ranges
@@ -300,7 +334,7 @@ const DATA = (() => {
   const html = readFileSync(join(OUT, 'dashboard', 'index.html'), 'utf8');
   const forbidden = ['1.2908', '0.2493', '1.1740', '0.7647', '8.028969', '0.463147',
     '184538021', '35830169', '2.0966', '1.290787', '104 / THIN 80',
-    '6.964567', '0.522266', '35364990', '777976039', '72029848', '1.2234', '1.2126', '25 / THIN 138'];
+    '6.964567', '0.522266', '45821199', '759726324', '103775920', '1.2234', '1.2126', '26 / THIN 130'];
   const hits = forbidden.filter((s) => html.includes(s));
   check('no validation literals in index.html', hits.length === 0, hits.join(', ') || 'none found');
 }
@@ -308,7 +342,7 @@ const DATA = (() => {
 // through because the grep above only covered index.html. The forbidden list
 // is the same validation literals — all of them are rendered from data.js at
 // runtime — plus the stale '142 places' (the B1 value, corrected to 143 in
-// radar-6 and 148 in radar-7).
+// radar-6, 148 in radar-7, 151 in radar-8).
 // Allowlisted hand-typed literals, all verified correct and documented:
 // the e^LOO factor is computed (Math.exp), 'roughly 24×' was removed,
 // '100,000×'/'10,000×' (threshold restatements), '7 steps', sandbox ranges.
@@ -318,7 +352,7 @@ const DATA = (() => {
   const js = readFileSync(join(OUT, 'dashboard', 'app.js'), 'utf8');
   const forbiddenJs = ['1.2908', '0.2493', '1.1740', '0.7647', '8.028969', '0.463147',
     '184538021', '35830169', '2.0966', '1.290787', '104 / THIN 80', '142 places',
-    '6.964567', '0.522266', '35364990', '777976039', '72029848', '1.2234', '1.2126', '25 / THIN 138'];
+    '6.964567', '0.522266', '45821199', '759726324', '103775920', '1.2234', '1.2126', '26 / THIN 130'];
   const hitsJs = forbiddenJs.filter((s) => js.includes(s));
   check('no validation literals in app.js', hitsJs.length === 0, hitsJs.join(', ') || 'none found');
 }

@@ -12,26 +12,13 @@
   <p class="top-meta"><span id="asof">Snapshot —</span><span id="modelVer">Model —</span><span>Offline — no network</span></p>
 </header>
 <main>
-  <section class="lede">
-    <div>
-      <h1>Which pre-token launches would be worth the most?</h1>
-      <p id="lede-text">Every protocol below records no token. The radar ranks them by implied
-      value — fitted value × launch odds — with a bootstrap interval and a farm
-      plan (cost, break-even, verdict) per row. Implied value is a model,
-      not a promise or a price.</p>
-      <p class="formula" id="formula"></p>
-    </div>
-    <dl class="facts">
-      <div><dt>Watchlist covered</dt><dd id="fact-watch">—</dd></div>
-      <div><dt>Pre-token rows ranked</dt><dd id="fact-board">—</dd></div>
-      <div><dt>Early rows below the floor</dt><dd id="fact-early">—</dd></div>
-      <div><dt>Live-token protocols set aside</dt><dd id="fact-live">—</dd></div>
-    </dl>
-  </section>
-
   <section class="kpi" aria-label="Key figures and build checks">
     <dl class="kpi-strip" id="kpiStrip"></dl>
     <ul class="integrity-strip" id="integrityStrip"></ul>
+  </section>
+
+  <section class="summary" aria-label="Evidence summary">
+    <p id="summary"></p>
   </section>
 
   <section class="controls" aria-label="Filter the board">
@@ -51,11 +38,6 @@
     <label class="check"><input type="checkbox" id="watchOnly"> Watchlist only</label>
     <span class="count" id="count" aria-live="polite"></span>
     <button type="button" class="button" id="clear">Clear filters</button>
-  </section>
-
-  <section class="panel evidence" aria-label="Out-of-sample evidence">
-    <h2>Out-of-sample evidence</h2>
-    <div id="evidenceOut"></div>
   </section>
 
   <section class="panel" aria-label="Ranked board">
@@ -83,6 +65,11 @@
     <p class="empty" id="empty" hidden>No protocol matches. Clear the search or pick another category.</p>
   </section>
 
+  <section class="panel evidence" aria-label="Out-of-sample evidence">
+    <h2>Out-of-sample evidence</h2>
+    <div id="evidenceOut"></div>
+  </section>
+
   <section class="panel sandbox" aria-label="Model sandbox">
     <h2>Test the radar's claims</h2>
     <p id="sandboxNote"></p>
@@ -96,7 +83,7 @@
     </div>
     <div class="sandbox-cols">
       <div>
-        <h3>Sandbox top 10 (re-sorted by the slope you pick)</h3>
+        <h3>Sandbox top 10 (your slope)</h3>
         <ol id="sandboxTop10"></ol>
       </div>
       <div>
@@ -120,8 +107,7 @@
     <div class="live-head">
       <h2>Already trades — market value, not an implied value</h2>
       <p>These protocols already have a token that trades. Their market cap is the market's
-      own number, shown as it stands — set aside here, never mixed into the ranked board,
-      so a traded token is never mistaken for a coming launch.</p>
+      own number — set aside here, never mixed into the ranked board.</p>
     </div>
     <div class="table-wrap">
       <table id="liveTable">
@@ -145,7 +131,7 @@
     <p>One function scores every row, from the snapshot figures only. No protocol name is
     special-cased and no row is hand-picked. A protocol is pre-token only when the
     snapshot <strong>records no token</strong> for it — no market cap, no CoinGecko id, no
-    symbol. That is what the record proves; it does not prove a token will ever exist.</p>
+    symbol. That proves the record, not that a token will ever exist.</p>
     <div id="methodFit"></div>
     <div id="methodOdds"></div>
     <div id="methodBoot"></div>
