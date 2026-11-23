@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar — pre-token protocols ranked by expected value</title>
+<title>Token Radar — pre-token protocols ranked by implied value</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -15,11 +15,10 @@
   <section class="lede">
     <div>
       <h1>Which pre-token launches would be worth the most?</h1>
-      <p id="lede-text">Every protocol below records no token. The radar ranks them by expected
-      value — an implied value fitted to the live-token protocols that already trade,
-      times launch odds — with a bootstrap interval and a farm plan
-      (cost, break-even, verdict) for each. Expected value is a model, not a
-      promise and not a price.</p>
+      <p id="lede-text">Every protocol below records no token. The radar ranks them by implied
+      value — a fitted value for the launch, times launch odds — with a bootstrap
+      interval and a farm plan (cost, break-even, verdict) for each. Implied value
+      is a model, not a promise and not a price.</p>
       <p class="formula" id="formula"></p>
     </div>
     <dl class="facts">
@@ -72,7 +71,7 @@
           <th scope="col"><button type="button" data-sort="age">Age</button></th>
           <th scope="col"><button type="button" data-sort="implied">Implied value</button></th>
           <th scope="col"><button type="button" data-sort="odds">Odds</button></th>
-          <th scope="col"><button type="button" data-sort="ev">Expected value</button></th>
+          <th scope="col"><button type="button" data-sort="ev">Value if launches</button></th>
           <th scope="col"><button type="button" data-sort="interval">P10–P90</button></th>
           <th scope="col"><button type="button" data-sort="rankrange">Rank range</button></th>
           <th scope="col"><button type="button" data-sort="verdict">Verdict</button></th>

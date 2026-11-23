@@ -1,4 +1,4 @@
-// Token Radar dashboard (radar-5). Reads window.RADAR (written beside
+// Token Radar dashboard (radar-6). Reads window.RADAR (written beside
 // dashboard/ by main.ts) and renders the ranked board, its filters, the
 // per-protocol detail view, the separate live-token section, the KPI /
 // integrity strips, the ledger, the methodology and the model sandbox.
@@ -135,7 +135,7 @@
       else if (key === 'age') { av = a.age_days === null ? -1 : a.age_days; bv = b.age_days === null ? -1 : b.age_days; }
       else if (key === 'rank') { av = a.rank; bv = b.rank; }
       else if (key === 'odds') { av = a.odds; bv = b.odds; }
-      else if (key === 'ev') { av = a.expected_value_usd; bv = b.expected_value_usd; }
+      else if (key === 'ev') { av = a.value_if_launches_usd; bv = b.value_if_launches_usd; }
       else if (key === 'interval') { av = a.p90_usd; bv = b.p90_usd; }
       else if (key === 'rankrange') { av = a.rank_hi - a.rank_lo; bv = b.rank_hi - b.rank_lo; }
       else if (key === 'verdict') { av = VERDICT_ORDER[a.verdict]; bv = VERDICT_ORDER[b.verdict]; }
@@ -244,7 +244,7 @@
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
         )),
         el('td', { class: 'num', text: fmtOdds(r.odds) }),
-        el('td', { class: 'num', text: fmtUsd(r.expected_value_usd) }),
+        el('td', { class: 'num', text: fmtUsd(r.value_if_launches_usd) }),
         el('td', { class: 'num interval', text: fmtInterval(r) }),
         el('td', { class: 'num', text: r.rank_lo + '–' + r.rank_hi }),
         el('td', null, el('span', { class: 'verdict v-' + r.verdict.toLowerCase(), text: r.verdict }))
@@ -323,7 +323,7 @@
       ['Split coverage', (F.split_coverage * 100).toFixed(1) + '%'],
       ['Verdicts', 'FARM ' + V.FARM + ' / THIN ' + V.THIN + ' / SKIP ' + V.SKIP],
       ['Median odds', DATA.median_odds.toFixed(3)],
-      ['Rank-1 expected value', money.format(DATA.max_ev.value) + ' (' + (maxEvRow ? maxEvRow.name : DATA.max_ev.slug) + ') — board rank 1 by expected value'],
+      ['Rank-1 implied value', money.format(DATA.max_ev.value) + ' (' + (maxEvRow ? maxEvRow.name : DATA.max_ev.slug) + ') — value if launches ' + money.format(maxEvRow ? maxEvRow.value_if_launches_usd : DATA.max_ev.value) + ' × odds ' + DATA.max_ev.odds.toFixed(3)],
     ];
     items.forEach(function (kv) {
       strip.appendChild(el('div', null, el('dt', { text: kv[0] }), el('dd', { text: kv[1] })));
@@ -365,8 +365,8 @@
     var F = DATA.fit, O = DATA.odds, A = DATA.assumptions;
     // --- fitted model ---
     var fitDiv = document.getElementById('methodFit');
-    fitDiv.appendChild(el('h3', { text: 'The fitted value model (radar-5)' }));
-    fitDiv.appendChild(el('p', { class: 'formula', text: 'log mcap = ' + F.intercept.toFixed(6) + ' + ' + F.slope.toFixed(6) + ' × ln(TVL) + category effect;  multiple = exp(log mcap − ln TVL), clamped to 0.08–0.60;  implied = TVL × multiple × growth × maturity' }));
+    fitDiv.appendChild(el('h3', { text: 'The fitted value model (radar-6)' }));
+    fitDiv.appendChild(el('p', { class: 'formula', text: 'log mcap = ' + F.intercept.toFixed(6) + ' + ' + F.slope.toFixed(6) + ' × ln(TVL) + category effect;  multiple = exp(log mcap − ln TVL), clamped to 0.08–0.60;  value if launches = TVL × multiple × growth × maturity' }));
     fitDiv.appendChild(el('p', { text: 'Fitted, not assumed: a pooled log-log OLS over the ' + F.n + ' live-token protocols with a positive market cap (' + F.df + ' degrees of freedom), outcome ln(market cap), predictors ln(TVL) plus one dummy per category with at least 5 live observations; every other category is pooled into the reference group. Growth and maturity stay the radar-2 terms — the variant that fitted a growth coefficient did worse held out.' }));
     var coefRows = [['Intercept', [F.intercept.toFixed(6), 'num']], ['Slope on ln(TVL)', [F.slope.toFixed(6), 'num']]];
     Object.keys(F.effects).sort().forEach(function (c) {
@@ -407,8 +407,8 @@
     // --- launch odds ---
     var oddsDiv = document.getElementById('methodOdds');
     oddsDiv.appendChild(el('h3', { text: 'Launch odds and expected value' }));
-    oddsDiv.appendChild(el('p', { text: 'Odds measure resemblance to protocols that already record a token; the snapshot contains no launch event, so no true launch rate can be estimated from it. They come from a logistic regression on all ' + DATA.ledger.total + ' protocols, outcome “records a token” (' + O.live_share.toFixed(4) + ' do): logit(odds) = ' + O.intercept.toFixed(6) + ' + ' + O.age.toFixed(6) + ' × ln(age) ' + (O.growth >= 0 ? '+' : '−') + ' ' + Math.abs(O.growth).toFixed(6) + ' × growth + ' + O.peer.toFixed(6) + ' × peer logit. Growth is the 7-day change clamped to −40%…+60%, divided by 100; the peer logit is the live share in the protocol’s own category, shrunk toward the overall share with a prior weight of ' + O.prior_weight + ' protocols. Expected value = implied value × odds. Odds are never a forecast that a token will launch, and expected value is never a promised payout.' }));
-    oddsDiv.appendChild(el('p', { text: 'The growth coefficient is negative as fitted: holding age and peer rate fixed, faster growth lowers odds, because the snapshot’s fast growers are young pre-token protocols while established live-token protocols grow slowly. Separation: AUC ' + O.auc.toFixed(4) + '; mean odds ' + O.mean_live.toFixed(3) + ' (records a token) vs ' + O.mean_pre.toFixed(3) + ' (pre-token). Brier ' + O.brier.toFixed(4) + ' (base rate ' + (O.live_share * (1 - O.live_share)).toFixed(4) + '). The board is ranked by expected value (fitted value × odds); implied value stays visible as the value-if-launches column.' }));
+    oddsDiv.appendChild(el('p', { text: 'Odds measure resemblance to protocols that already record a token; the snapshot contains no launch event, so no true launch rate can be estimated from it. They come from a logistic regression on all ' + DATA.ledger.total + ' protocols, outcome “records a token” (' + O.live_share.toFixed(4) + ' do): logit(odds) = ' + O.intercept.toFixed(6) + ' + ' + O.age.toFixed(6) + ' × ln(age) ' + (O.growth >= 0 ? '+' : '−') + ' ' + Math.abs(O.growth).toFixed(6) + ' × growth + ' + O.peer.toFixed(6) + ' × peer logit. Growth is the 7-day change clamped to −40%…+60%, divided by 100; the peer logit is the live share in the protocol’s own category, shrunk toward the overall share with a prior weight of ' + O.prior_weight + ' protocols. Implied value = fitted value × odds. Odds are never a forecast that a token will launch, and implied value is never a promised payout.' }));
+    oddsDiv.appendChild(el('p', { text: 'The growth coefficient is negative as fitted: holding age and peer rate fixed, faster growth lowers odds, because the snapshot’s fast growers are young pre-token protocols while established live-token protocols grow slowly. Separation: AUC ' + O.auc.toFixed(4) + '; mean odds ' + O.mean_live.toFixed(3) + ' (records a token) vs ' + O.mean_pre.toFixed(3) + ' (pre-token). Brier ' + O.brier.toFixed(4) + ' (base rate ' + (O.live_share * (1 - O.live_share)).toFixed(4) + '). Implied value = fitted value × launch odds — the expected value of a launch. Implied value is the entry’s own claim. The board is ranked by implied value; the fitted value stays visible as the value-if-launches column.' }));
 
     // --- bootstrap ---
     var bootDiv = document.getElementById('methodBoot');
@@ -422,7 +422,7 @@
     farmDiv.appendChild(el('h3', { text: 'Farm plans and their netting' }));
     var costs = DATA.rows.map(function (r) { return r.farm_cost_usd; });
     var dph = DATA.rows.map(function (r) { return r.dollars_per_hour; });
-    farmDiv.appendChild(el('p', { text: 'Each plan is 7 steps shaped by the protocol’s category family, primary chain, capital tier ($250 / $150 / $100 / $50 from TVL) and hold time (60 / 45 / 30 days from age). Netting is computed from tier and hold, never by parsing the step text: gas = $3 + 2 × gas core ($8 at $150+ capital, $4 below) + $2 per week of hold; opportunity cost prices locked capital at an assumed ' + (A.opportunity_rate * 100).toFixed(0) + '% per year; total cost = gas + opportunity (range ' + fmtUsd(Math.min.apply(null, costs)) + '–' + fmtUsd(Math.max.apply(null, costs)) + '). Break-even share = total cost ÷ expected value. Verdict: FARM when the share is at most ' + A.verdict_farm + ' (expected value covers cost at least 100,000×), THIN at most ' + A.verdict_thin + ' (at least 10,000×), else SKIP. $/hour assumes the farmer captures ' + (A.allocation_share * 100).toFixed(3) + '% of expected value: proceeds = expected value × ' + (A.allocation_share * 100).toFixed(3) + '%, net = proceeds − total cost, $/hour = net ÷ active hours (hold days excluded). $/hour is a screening figure under that assumption, not a promised income — change it in the sandbox and it moves. Median $/hour is $' + Math.round(median(dph)).toLocaleString() + ' (range $' + Math.round(Math.min.apply(null, dph)).toLocaleString() + ' to $' + Math.round(Math.max.apply(null, dph)).toLocaleString() + '). The FARM bar was reviewed (radar-5): a $/hour ≥ $25 + net-beats-T-bill candidate gives the same ' + DATA.verdict_counts.FARM + ' rows, so the bar is kept.' }));
+    farmDiv.appendChild(el('p', { text: 'Each plan is 7 steps shaped by the protocol’s category family, primary chain, capital tier ($250 / $150 / $100 / $50 from TVL) and hold time (60 / 45 / 30 days from age). Netting is computed from tier and hold, never by parsing the step text: gas = $3 + 2 × gas core ($8 at $150+ capital, $4 below) + $2 per week of hold; opportunity cost prices locked capital at an assumed ' + (A.opportunity_rate * 100).toFixed(0) + '% per year; total cost = gas + opportunity (range ' + fmtUsd(Math.min.apply(null, costs)) + '–' + fmtUsd(Math.max.apply(null, costs)) + '). Break-even share = total cost ÷ expected value. Verdict: FARM when the share is at most ' + A.verdict_farm + ' (expected value covers cost at least 100,000×), THIN at most ' + A.verdict_thin + ' (at least 10,000×), else SKIP. $/hour assumes the farmer captures ' + (A.allocation_share * 100).toFixed(3) + '% of expected value: proceeds = expected value × ' + (A.allocation_share * 100).toFixed(3) + '%, net = proceeds − total cost, $/hour = net ÷ active hours (hold days excluded). $/hour is a screening figure under that assumption, not a promised income — change it in the sandbox and it moves. Median $/hour is $' + Math.round(median(dph)).toLocaleString() + ' (range $' + Math.round(Math.min.apply(null, dph)).toLocaleString() + ' to $' + Math.round(Math.max.apply(null, dph)).toLocaleString() + '). The FARM bar was reviewed (radar-6): a $/hour ≥ $25 + net-beats-T-bill candidate gives the same ' + DATA.verdict_counts.FARM + ' rows, so the bar is kept.' }));
 
     // --- ledger ---
     var ledDiv = document.getElementById('methodLedger');
@@ -488,7 +488,7 @@
     document.getElementById('sandboxNote').textContent =
       'The sliders recompute the displayed values only; the submitted board is the locked ' + DATA.model_version + ' board, and no slider rewrites it or persists into board.json. Verdicts are set by the break-even ratio and do not move with allocation; net $/hour does.';
     document.getElementById('sandboxLock').textContent =
-      'Locked board: expected value (implied × odds) at slope b = ' + DATA.fit.slope.toFixed(6) + ', 0.01% allocation for $/hour. The sandbox shows the same rows under a different slope or allocation.';
+      'Locked board: implied value (fitted × odds) at slope b = ' + DATA.fit.slope.toFixed(6) + ', 0.01% allocation for $/hour. The sandbox shows the same rows under a different slope or allocation.';
     var slopeEl = document.getElementById('slopeSlider');
     var allocEl = document.getElementById('allocSlider');
     slopeEl.value = String(DATA.fit.slope);
@@ -522,7 +522,7 @@
         ['Age', [fmtAge(ra.age_days), 'num'], [fmtAge(rb.age_days), 'num']],
         ['Implied value', [money.format(ra.implied_value_usd), 'num'], [money.format(rb.implied_value_usd), 'num']],
         ['Odds', [fmtOdds(ra.odds), 'num'], [fmtOdds(rb.odds), 'num']],
-        ['Expected value', [money.format(ra.expected_value_usd), 'num'], [money.format(rb.expected_value_usd), 'num']],
+        ['Value if launches', [money.format(ra.value_if_launches_usd), 'num'], [money.format(rb.value_if_launches_usd), 'num']],
         ['P10–P90', [fmtInterval(ra), 'num'], [fmtInterval(rb), 'num']],
         ['Rank range', [(ra.rank_lo + '–' + ra.rank_hi), 'num'], [(rb.rank_lo + '–' + rb.rank_hi), 'num']],
         ['Verdict', ra.verdict, rb.verdict],
@@ -568,15 +568,15 @@
     ));
     var multLine = 'Fitted multiple ' + m.fitted_multiple + ' (raw ' + m.fitted_multiple_raw + (m.at_clamp_bound ? ', at clamp bound' : '') + ')';
     dialog.appendChild(el('section', { class: 'detail-section' },
-      el('h3', { text: 'Implied value (fitted model)' }),
+      el('h3', { text: 'Value if launches (fitted model)' }),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'TVL' }), el('b', { text: fmtUsd(row.tvl_usd) })),
         el('div', null, el('span', { text: 'Fitted multiple (' + (row.category || 'Other') + ', effect ' + (m.category_effect >= 0 ? '+' : '') + m.category_effect + ')' }), el('b', { text: String(m.fitted_multiple) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { text: String(m.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier (age ' + fmtAge(row.age_days) + ')' }), el('b', { text: String(m.maturity_multiplier) })),
-        el('div', null, el('span', { text: 'Implied value' }), el('b', { text: money.format(row.implied_value_usd) }))
+        el('div', null, el('span', { text: 'Value if launches' }), el('b', { text: money.format(row.value_if_launches_usd) }))
       ),
-      el('p', { class: 'words-eq', text: 'TVL ' + fmtUsd(row.tvl_usd) + ' × ' + m.fitted_multiple + ' (fitted multiple, slope ' + m.slope + ') × ' + m.growth_multiplier + ' (growth) × ' + m.maturity_multiplier + ' (maturity) = ' + money.format(row.implied_value_usd) }),
+      el('p', { class: 'words-eq', text: 'TVL ' + fmtUsd(row.tvl_usd) + ' × ' + m.fitted_multiple + ' (fitted multiple, slope ' + m.slope + ') × ' + m.growth_multiplier + ' (growth) × ' + m.maturity_multiplier + ' (maturity) = ' + money.format(row.value_if_launches_usd) }),
       el('p', { text: multLine + '. The curve is log mcap = ' + m.intercept + ' + ' + m.slope + ' × ln(TVL) + category effect, fitted to the ' + DATA.fit.n + ' live-token protocols; the D1r median multiple for this category (' + m.d1r_multiple + ') is the fallback. ' + growthWord + ' Maturity multiplier ' + m.maturity_multiplier + ' rewards ' + fmtAge(row.age_days) + ' of life with no token on record. The fit is weak in absolute terms (R² ' + DATA.fit.r2.toFixed(2) + ') — see Methodology.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
@@ -588,8 +588,9 @@
       }))
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
-      el('h3', { text: 'Launch odds and expected value' }),
-      el('p', { text: 'Odds ' + fmtOdds(row.odds) + ' — a peer-resemblance score, not a forecast that a token will launch. Expected value ' + money.format(row.expected_value_usd) + ' = implied value × odds.' }),
+      el('h3', { text: 'Launch odds and implied value' }),
+      el('p', { text: 'Implied value = fitted value × launch odds — the expected value of a launch. Implied value is the entry’s own claim. For this row: ' + money.format(row.implied_value_usd) + ' = ' + money.format(row.value_if_launches_usd) + ' (value if launches) × odds ' + fmtOdds(row.odds) + '.' }),
+      el('p', { text: 'Odds ' + fmtOdds(row.odds) + ' — a peer-resemblance score, not a forecast that a token will launch.' }),
       el('p', { text: 'Odds inputs: ln(age ' + (row.age_days === null ? '365 (unknown)' : row.age_days + 'd') + ') = ' + Math.log(row.age_days === null ? 365 : row.age_days).toFixed(3) + '; growth term ' + (row.change_7d === null ? '0' : (Math.min(60, Math.max(-40, row.change_7d)) / 100).toFixed(3)) + '; peer rate in this category ' + (row.peer_shrunk * 100).toFixed(1) + '% (shrunk), peer logit ' + row.peer_logit.toFixed(3) + '. The snapshot holds no launch event, so no true launch rate can be estimated.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
@@ -622,7 +623,7 @@
     document.getElementById('fact-early').textContent = String(DATA.early_size);
     document.getElementById('fact-live').textContent = String(DATA.live_size);
     document.getElementById('formula').textContent =
-      'expected = implied × odds; implied = TVL × fitted multiple × growth × maturity — ' + DATA.model_version + ', snapshot ' + DATA.as_of + '.';
+      'implied = fitted × odds; fitted = TVL × fitted multiple × growth × maturity — ' + DATA.model_version + ', snapshot ' + DATA.as_of + '.';
     document.getElementById('src').textContent =
       'Source: ' + (DATA.source ? DATA.source.split(' ')[0] : 'DefiLlama') + ' protocol index, snapshot ' + DATA.as_of + '.';
   }

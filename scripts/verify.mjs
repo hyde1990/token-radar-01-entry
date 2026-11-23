@@ -1259,14 +1259,14 @@ with sync_playwright() as p:
     res['method_ablation'] = 'Ablation' in method and 'category effects' in method
     res['method_keep'] = 'every term is kept' in method
     odds = pg.locator('#methodOdds').inner_text()
-    res['method_def'] = 'Implied value = fitted value' in odds and "the entry's own claim" in odds
+    res['method_def'] = 'Implied value = fitted value' in odds and "the entry\u2019s own claim" in odds
     pg.goto((out / 'dashboard' / 'index.html').as_uri() + '#p=bitfi-basis')
     pg.wait_for_selector('#detail[open]')
     dlg = pg.locator('#detail').inner_text()
     res['detail_anchored'] = 'Anchored by' in dlg
     res['detail_solstice'] = 'Solstice' in dlg
     res['detail_bitfi'] = 'BitFi Basis' in dlg
-    res['detail_def'] = 'Implied value = fitted value' in dlg and "the entry's own claim" in dlg
+    res['detail_def'] = 'Implied value = fitted value' in dlg and "the entry\u2019s own claim" in dlg
     res['detail_vfl'] = 'value if launches' in dlg.lower()
     b.close()
 print(json.dumps(res))
@@ -1302,7 +1302,7 @@ print(json.dumps(res))
       if (!v26.method_wf) problems.push('methodology lacks the walk-forward paragraph');
       if (!v26.method_ablation) problems.push('methodology lacks the ablation table');
       if (!v26.method_keep) problems.push('methodology lacks the keep verdict');
-      if (!v26.method_def) problems.push('methodology odds section lacks the implied definition ("Implied value = fitted value … the entry\'s own claim")');
+      if (!v26.method_def) problems.push('methodology odds section lacks the implied definition ("Implied value = fitted value … the entry\u2019s own claim")');
       if (!v26.detail_anchored) problems.push('detail dialog lacks "Anchored by"');
       if (!v26.detail_solstice) problems.push('detail dialog lacks comp Solstice');
       if (!v26.detail_bitfi) problems.push('detail dialog lacks "BitFi Basis"');
