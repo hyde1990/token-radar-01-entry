@@ -33,6 +33,10 @@ export interface BootstrapResult {
   p90_usd: number;
   rank_lo: number;
   rank_hi: number;
+  /** Refits whose predicted value equals the collapsed P10 (= P90), when the
+   *  interval collapsed; null otherwise. Never 200/200 by assumption — the
+   *  count is measured, e.g. 198/200 for steakhouse-financial (radar-4 T4). */
+  stable_refits: number | null;
 }
 
 export const BOOTSTRAP_B = 200;
@@ -77,11 +81,13 @@ export function bootstrapIntervals(
   const out = new Map<string, BootstrapResult>();
   rows.forEach((r, i) => {
     const vs = [...values[i]!].sort((a, b) => a - b);
+    const collapsed = vs[19] === vs[179];
     out.set(r.slug, {
       p10_usd: vs[19]!,
       p90_usd: vs[179]!,
       rank_lo: Math.min(...ranks[i]!),
       rank_hi: Math.max(...ranks[i]!),
+      stable_refits: collapsed ? values[i]!.filter((v) => v === vs[19]).length : null,
     });
   });
   return out;

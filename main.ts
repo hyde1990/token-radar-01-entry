@@ -83,7 +83,7 @@ integrity.push({
   value: 'identical (2 builds)',
 });
 if (!validation.fitMatches6dp) {
-  fail(`integrity: refit OLS coefficients differ from the hardcoded D8 constants (max delta ${validation.fitMaxDelta.toExponential(2)}) — refusing to ship radar-3 branding on a mismatched fit`);
+  fail(`integrity: refit OLS coefficients differ from the hardcoded D8 constants (max delta ${validation.fitMaxDelta.toExponential(2)}) — refusing to ship radar-4 branding on a mismatched fit`);
 }
 integrity.push({
   id: 'fit-recompute',
@@ -92,7 +92,7 @@ integrity.push({
   value: `match to 6 dp (max Δ ${validation.fitMaxDelta.toExponential(1)})`,
 });
 if (!validation.oddsMatches6dp) {
-  fail(`integrity: refit odds coefficients differ from the hardcoded D9 constants (max delta ${validation.oddsMaxDelta.toExponential(2)}) — refusing to ship radar-3 branding on a mismatched fit`);
+  fail(`integrity: refit odds coefficients differ from the hardcoded D9 constants (max delta ${validation.oddsMaxDelta.toExponential(2)}) — refusing to ship radar-4 branding on a mismatched fit`);
 }
 if (!validation.stability.pass) {
   fail(`integrity: D8 stability gate tripped — top-10 overlap ${validation.stability.overlap}/10, rank-1 ${validation.stability.rank1} vs D1r ${validation.stability.rank1D1r} — refusing to lock the ranking`);
@@ -167,7 +167,7 @@ writeFileSync(join(outDir, 'dossier.json'), dossierA);
 
 process.stdout.write(
   `token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside, ${fallbackRows} fallback farm plans)\n` +
-    `token radar: rank 1 ${board[0]!.slug} $${board[0]!.implied_value_usd.toLocaleString()} (radar-3 fitted); top-10 overlap vs D1r ${validation.stability.overlap}/10; verdicts FARM ${radar.verdict_counts.FARM} / THIN ${radar.verdict_counts.THIN} / SKIP ${radar.verdict_counts.SKIP}\n` +
+    `token radar: rank 1 ${board[0]!.slug} $${board[0]!.implied_value_usd.toLocaleString()} (radar-4 fitted); top-10 overlap vs D1r ${validation.stability.overlap}/10; verdicts FARM ${radar.verdict_counts.FARM} / THIN ${radar.verdict_counts.THIN} / SKIP ${radar.verdict_counts.SKIP}\n` +
     `token radar: LOO median |ln err| ${radar.fit.loo_median.toFixed(4)}, split ${radar.fit.split_median.toFixed(4)}, R² ${radar.fit.r2.toFixed(4)}; odds AUC ${radar.odds.auc.toFixed(4)}\n` +
     `token radar: wrote ${join(outDir, 'board.json')}, ${join(outDir, 'data.js')}, ${join(outDir, 'dashboard')} (${dashboardFiles.length} files), ${join(outDir, 'screenshots')} (${shotFiles.length} images) and ${join(outDir, 'dossier.json')}\n`,
 );

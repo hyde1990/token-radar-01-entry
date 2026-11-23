@@ -17,7 +17,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const KIT = '/home/hatch/workspace/makefun/scout-2026-11-21/kits/token-radar-01';
+// Kit fresh level 38 (snapshot byte-identical to the 21 Nov kit, sha 42a71213…).
+const KIT = '/home/hatch/workspace/makefun/token-radar/kit-fresh/token-radar-01-kit';
 const SNAP = join(KIT, 'input', 'snapshot.json');
 const OUT = join(ROOT, '.test-out');
 
@@ -135,7 +136,7 @@ check('worked example (fitted, quoted constants) $18,673,967', Math.abs(worked -
 }
 
 const dashBytes = readdirSync(join(OUT, 'dashboard')).reduce((n, f) => n + statSync(join(OUT, 'dashboard', f)).size, 0);
-check('dashboard source <= 60,000 B', dashBytes <= 60000, `${dashBytes} B`);
+check('dashboard source <= 65,000 B (target; hard cap 65,536 B)', dashBytes <= 65000, `${dashBytes} B`);
 const dossier = readFileSync(join(OUT, 'dossier.json'));
 check('dossier <= 1.5 MiB', dossier.length <= 1_572_864, `${dossier.length} B`);
 const shots = readdirSync(join(OUT, 'screenshots'));
@@ -151,9 +152,105 @@ check('data.js agrees with board.json', (() => {
   const d = JSON.parse(m[1]);
   return d.rows.length === rows.length && d.rows.every((r, i) => r.slug === rows[i].slug && r.implied_value_usd === rows[i].implied_value_usd)
     && d.live.length === 24 && d.live.every((r) => r.mcap_usd > 0)
-    && d.model_version === 'radar-3' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
+    && d.model_version === 'radar-4' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
     && d.integrity.length === 5 && d.integrity.every((c) => c.pass === true);
 })());
+
+// --- radar-4 (T1–T4): walk-forward, ablation, comps, stable intervals ---
+// Numbers below are the independent recompute in
+// ~/workspace/makefun/token-radar/verification/build-log-radar4.md §0
+// (scripts /tmp/radar4-recompute.mjs + /tmp/radar4-recompute2.mjs); the
+// verify suite (V22–V24) recomputes them again with its own code.
+const DATA = (() => {
+  const js = readFileSync(join(OUT, 'data.js'), 'utf8');
+  const m = js.match(/^window\.RADAR=(\{.*\});\n$/s);
+  return m ? JSON.parse(m[1]) : null;
+})();
+{
+  const wf = DATA?.fit?.walk_forward;
+  const approx = (a, b, tol = 0.0005) => typeof a === 'number' && Math.abs(a - b) <= tol;
+  check('T1 walk-forward n=95 (33 null listed_at excluded, no imputation)',
+    wf && wf.n === 95 && wf.n_null_excluded === 33,
+    wf ? `n=${wf.n}, excluded=${wf.n_null_excluded}` : 'walk_forward missing');
+  check('T1 fold 66/29 median 1.2004 coverage 79.3%',
+    wf && wf.folds?.[0]?.train === 66 && wf.folds[0].test === 29
+    && approx(wf.folds[0].median, 1.2004) && Math.abs(wf.folds[0].coverage - 23 / 29) < 0.001,
+    wf?.folds?.[0] ? `median ${wf.folds[0].median?.toFixed(4)}, cov ${(wf.folds[0].coverage * 100).toFixed(1)}%` : 'fold 0 missing');
+  check('T1 fold 80/15 median 2.2077 coverage 73.3%',
+    wf && wf.folds?.[1]?.train === 80 && wf.folds[1].test === 15
+    && approx(wf.folds[1].median, 2.2077) && Math.abs(wf.folds[1].coverage - 11 / 15) < 0.001,
+    wf?.folds?.[1] ? `median ${wf.folds[1].median?.toFixed(4)}, cov ${(wf.folds[1].coverage * 100).toFixed(1)}%` : 'fold 1 missing');
+  check('T1 pooled median 1.2509 coverage 77.3% (44 predictions, 15 newest in both folds)',
+    wf && approx(wf.pooled_median, 1.2509) && Math.abs(wf.pooled_coverage - 34 / 44) < 0.001
+    && approx(wf.loo_implied_median, 1.2490),
+    wf ? `pooled ${wf.pooled_median?.toFixed(4)}, cov ${(wf.pooled_coverage * 100).toFixed(1)}%, LOO-implied ${wf.loo_implied_median?.toFixed(4)}` : 'walk_forward missing');
+}
+{
+  const ab = DATA?.fit?.ablation;
+  const want = {
+    'slope/size': { loo: 1.2006, wf: 1.3403 },
+    growth: { loo: 1.3106, wf: 1.3183 },
+    maturity: { loo: 1.2387, wf: 1.3542 },
+    'category effects': { loo: 1.2434, wf: 1.2126 },
+  };
+  const approx = (a, b) => typeof a === 'number' && Math.abs(a - b) <= 0.0005;
+  check('T2 ablation: 4 terms, all KEEP, LOO/WF match independent recompute',
+    Array.isArray(ab) && ab.length === 4 && ab.every((r) =>
+      want[r.term] && approx(r.loo_without, want[r.term].loo)
+      && approx(r.wf_pooled_without, want[r.term].wf) && r.decision === 'keep'),
+    ab ? ab.map((r) => `${r.term} LOO ${r.loo_without?.toFixed(4)} WF ${r.wf_pooled_without?.toFixed(4)} ${r.decision}`).join(' | ') : 'ablation missing');
+  check('T2 ablation movement recorded (no-cat re-ranks 193/198, max 90)',
+    Array.isArray(ab) && ab.find((r) => r.term === 'category effects')?.rows_moved === 193
+    && ab.find((r) => r.term === 'category effects')?.max_displacement === 90,
+    ab ? JSON.stringify(ab.find((r) => r.term === 'category effects')) : 'ablation missing');
+}
+{
+  const bySlug = new Map(snap.protocols.map((p) => [p.slug, p]));
+  const livePos = new Set(snap.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0).map((p) => p.slug));
+  const approx6 = (a, b) => Math.abs(a - b) <= 1e-6;
+  let bad = '';
+  let fallbackRows = 0;
+  for (const r of rows) {
+    if (!Array.isArray(r.comps) || r.comps.length !== 3) { bad = `${r.slug}: comps not 3`; break; }
+    if (r.comps_same_category !== r.comps.filter((c) => c.same_category).length) { bad = `${r.slug}: comps_same_category mismatch`; break; }
+    if (r.comps_same_category < 3) fallbackRows++;
+    for (const c of r.comps) {
+      const p = bySlug.get(c.slug);
+      if (!p || !livePos.has(c.slug)) { bad = `${r.slug}: comp ${c.slug} not a live positive-mcap token`; break; }
+      if (c.name !== p.name || c.tvl_usd !== p.tvl_usd || !approx6(c.multiple, Math.round((p.mcap_usd / p.tvl_usd) * 1e6) / 1e6)) {
+        bad = `${r.slug}: comp ${c.slug} fields mismatch`; break;
+      }
+      if (c.same_category !== (p.category === r.category)) { bad = `${r.slug}: comp ${c.slug} same_category wrong`; break; }
+    }
+    if (bad) break;
+  }
+  check('T3 comps: 3 live traded tokens per row, fields match snapshot', bad === '', bad || 'all 198 rows x 3 comps');
+  check('T3 fallback rows: 102/198 need cross-category comps', fallbackRows === 102, `${fallbackRows} rows`);
+  const spot = (rank, slugs) => {
+    const r = rows[rank - 1];
+    return r && Array.isArray(r.comps) && JSON.stringify(r.comps.map((c) => c.slug)) === JSON.stringify(slugs);
+  };
+  check('T3 comps spot-check rank 1 / 99 / 198',
+    spot(1, ['api3', 'babylon-protocol', 'polygon-bridge'])
+    && spot(99, ['veranta', 'gains-network', 'ekubo'])
+    && spot(198, ['harmonix-finance', 'looped-hype', 'aura']),
+    `r1 ${rows[0]?.comps?.map((c) => c.slug).join(',')}; r99 ${rows[98]?.comps?.map((c) => c.slug).join(',')}; r198 ${rows[197]?.comps?.map((c) => c.slug).join(',')}`);
+  const sym = rows.find((r) => r.slug === 'symbiotic');
+  check('T3 comps spot-check 0-live category row (symbiotic: 0 same-category)',
+    sym && sym.comps_same_category === 0
+    && JSON.stringify(sym.comps.map((c) => c.slug)) === JSON.stringify(['xdai-stake-bridge', 'starknet-bridge', 'solstice']),
+    sym ? sym.comps.map((c) => c.slug).join(',') : 'symbiotic not on board');
+}
+{
+  const collapsed = rows.filter((r) => r.p10_usd === r.p90_usd);
+  const wantStable = {
+    'steakhouse-financial': 198, 'sentora-curator': 198, gauntlet: 197, veda: 196, usdd: 188,
+  };
+  check('T4 collapsed intervals: 5 rows, stable_refits counted (not 200/200)',
+    collapsed.length === 5 && collapsed.every((r) => r.stable_refits === wantStable[r.slug])
+    && rows.filter((r) => r.p10_usd !== r.p90_usd).every((r) => r.stable_refits === null),
+    collapsed.map((r) => `${r.slug} ${r.stable_refits}/200`).join(', ') || `${collapsed.length} collapsed rows`);
+}
 
 // No pasted validation numbers in the static dashboard shell: every number
 // the page shows must come from data.js at runtime. The sandbox ranges

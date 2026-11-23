@@ -34,7 +34,7 @@
 //   honest bootstrap (entry/BUILD.md, radar-3, has the evidence).
 
 import { bootstrapIntervals, BOOTSTRAP_B, BOOTSTRAP_SEED } from './bootstrap.ts';
-import { dot, median, mulberry32, ols, solve } from './ols.ts';
+import { dot, median, mulberry32, ols, olsBootstrap, solve } from './ols.ts';
 
 /** One protocol entry of the sealed snapshot: exactly its ten fields. */
 export interface SnapshotProtocol {
@@ -94,7 +94,7 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
 };
 
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** Live-token rows the dashboard's separate live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -191,6 +191,19 @@ export interface ModelBreakdown {
   at_clamp_bound: boolean;
 }
 
+/** One traded-token anchor for a board row (radar-4 T3): a live-token
+ *  protocol from the snapshot, never a hand-picked name. `multiple` is its
+ *  market-cap/TVL ratio; `same_category` says whether it shares the row's
+ *  category (rows in thin categories are filled with the TVL-nearest
+ *  cross-category tokens). */
+export interface Comp {
+  slug: string;
+  name: string;
+  tvl_usd: number;
+  multiple: number;
+  same_category: boolean;
+}
+
 /** One row of board.json. */
 export interface BoardRow {
   rank: number;
@@ -216,6 +229,11 @@ export interface BoardRow {
   p90_usd: number;
   rank_lo: number;
   rank_hi: number;
+  /** Refits equal to the collapsed P10 (= P90), when collapsed; null otherwise (T4). */
+  stable_refits: number | null;
+  /** The 3 traded-token anchors (T3), nearest by |ln TVL ratio|. */
+  comps: Comp[];
+  comps_same_category: number;
   capital_tier: number;
   hold_days: number;
   gas_total_usd: number;
@@ -251,6 +269,9 @@ export interface RadarRow {
   p90_usd: number;
   rank_lo: number;
   rank_hi: number;
+  stable_refits: number | null;
+  comps: Comp[];
+  comps_same_category: number;
   capital_tier: number;
   hold_days: number;
   gas_total_usd: number;
@@ -286,6 +307,52 @@ export interface HorseRaceRow {
   split_median: number;
 }
 
+/** One walk-forward fold (radar-4 T1): fit on the oldest `train` dated
+ *  live tokens, test on the next-newest `test`. Coverage is the share of
+ *  test errors within 1.2816 × the implied-basis LOO RMSE. */
+export interface WalkForwardFold {
+  train: number;
+  test: number;
+  median: number;
+  coverage: number;
+}
+
+/** Walk-forward validation (radar-4 T1). Only dated live tokens count
+ *  (n=95; 33 null `listed_at` excluded, no imputation). The pooled median
+ *  pools both folds' test errors, so the 15 newest tokens are counted in
+ *  both folds — the methodology says so. */
+export interface WalkForward {
+  n: number;
+  n_null_excluded: number;
+  earliest: string;
+  latest: string;
+  folds: WalkForwardFold[];
+  pooled_median: number;
+  pooled_coverage: number;
+  loo_implied_median: number;
+  loo_implied_rmse: number;
+}
+
+/** One per-term ablation row (radar-4 T2). `loo_without` / `wf_pooled_without`
+ *  are the blind-test medians with the term removed, on the implied-value
+ *  basis (|ln mcap − ln implied|, with the shipped 0.08–0.60 clamp applied
+ *  to the fitted multiple). A term is dropped only when removing it
+ *  improves BOTH blind tests by more than 0.05 — no term cleared that bar,
+ *  so every decision here is keep. `rows_moved` / `max_displacement` /
+ *  `top10_overlap` measure the board re-ranking the drop would cause. */
+export interface AblationRow {
+  term: string;
+  loo_without: number;
+  loo_delta: number;
+  wf_pooled_without: number;
+  wf_pooled_delta: number;
+  decision: 'keep' | 'drop';
+  rows_moved: number;
+  max_displacement: number;
+  top10_overlap: number;
+  note: string;
+}
+
 /** The fitted model's held-out evidence, computed from the snapshot. */
 export interface FitMetrics {
   intercept: number;
@@ -301,6 +368,8 @@ export interface FitMetrics {
   loo_coverage: number;
   split_coverage: number;
   horse_race: HorseRaceRow[];
+  walk_forward: WalkForward;
+  ablation: AblationRow[];
 }
 
 /** The launch-odds evidence, computed from the snapshot. */
@@ -689,6 +758,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     p90_usd: s.v.implied,
     rank_lo: i + 1,
     rank_hi: i + 1,
+    // stable_refits (bootstrap) and comps (T3) are filled in by buildRadar.
+    stable_refits: null,
+    comps: [],
+    comps_same_category: 0,
     capital_tier: s.net.capitalTier,
     hold_days: s.net.holdDays,
     gas_total_usd: s.net.gasTotal,
@@ -1144,6 +1217,234 @@ export function fitValidation(snapshot: Snapshot): {
   return { beta, r2, residSd, looMedian, looRmse, splitMedian, looCoverage, splitCoverage, horseRace };
 }
 
+// ---------------------------------------------------------------------------
+// radar-4: walk-forward (T1), ablation (T2), comps anchors (T3).
+// All numbers are computed here from the snapshot; the verify suite (V22–V24)
+// recomputes them with its own independent code.
+// ---------------------------------------------------------------------------
+
+export type AblationVariant = 'full' | 'no-slope' | 'no-growth' | 'no-maturity' | 'no-cat';
+
+/** The design row for a variant: 'no-cat' drops the category dummies,
+ *  'no-slope' drops ln(TVL) (intercept + dummies only); the rest use the
+ *  full design. 'no-growth' / 'no-maturity' keep the full design — those
+ *  terms are post-fit multipliers, dropped in the prediction, not the fit. */
+function designRow(p: SnapshotProtocol, big: readonly string[], variant: AblationVariant): number[] {
+  if (variant === 'no-cat') return [1, Math.log(p.tvl_usd)];
+  if (variant === 'no-slope') return [1, ...big.map((c) => (p.category === c ? 1 : 0))];
+  return [1, Math.log(p.tvl_usd), ...big.map((c) => (p.category === c ? 1 : 0))];
+}
+
+/** ln(implied) predicted with a fitted beta under a variant: the OLS
+ *  prediction, turned into the shipped implied value — TVL × the fitted
+ *  multiple CLAMPED to 0.08–0.60, × the growth/maturity multipliers the
+ *  variant keeps. The clamp is part of the shipped quantity (41/128 live
+ *  tokens sit outside it under the full-sample fit), so the validation
+ *  predicts the clamped value, not the raw curve: an unclamped version of
+ *  this function gave different walk-forward numbers (fold 2: 1.8103 vs
+ *  2.2077 clamped) and was replaced during the build when the second
+ *  recompute script caught the gap. For every variant the raw multiple is
+ *  exp(ln-mcap prediction − ln TVL), clamped. */
+function logImpliedFromBeta(
+  beta: readonly number[],
+  p: SnapshotProtocol,
+  big: readonly string[],
+  variant: AblationVariant,
+  asOf: string,
+): number {
+  const raw = Math.exp(dot(designRow(p, big, variant), beta) - Math.log(p.tvl_usd));
+  const multiple = clamp(raw, FIT.multipleFloor, FIT.multipleCap);
+  let lp = Math.log(p.tvl_usd) + Math.log(multiple);
+  const gm = growthMaturity(p, asOf);
+  if (variant !== 'no-growth') lp += Math.log(gm.growthMult);
+  if (variant !== 'no-maturity') lp += Math.log(gm.maturityMult);
+  return lp;
+}
+
+/** Leave-one-out median |ln err| on the implied-value basis for a variant:
+ *  each held-out row is predicted from a refit without it (olsBootstrap,
+ *  so a train set missing a category drops that dummy instead of going
+ *  singular — the honest rule of lib/ols.ts). The implied basis (|ln mcap
+ *  − ln implied|, growth/maturity included) is the one the board actually
+ *  ships; the OLS-only LOO (1.2908) stays the headline in fitValidation. */
+export function looImplied(snapshot: Snapshot, variant: AblationVariant = 'full'): { median: number; rmse: number } {
+  const { live, big, y } = liveDesign(snapshot);
+  const Xv = live.map((p) => designRow(p, big, variant));
+  const errs: number[] = [];
+  for (let h = 0; h < live.length; h++) {
+    const beta = olsBootstrap(
+      Xv.filter((_, i) => i !== h),
+      y.filter((_, i) => i !== h),
+    );
+    errs.push(Math.abs(y[h]! - logImpliedFromBeta(beta, live[h]!, big, variant, snapshot.as_of)));
+  }
+  return { median: median(errs), rmse: Math.sqrt(errs.reduce((s, e) => s + e * e, 0) / errs.length) };
+}
+
+/** Walk-forward folds for one variant: the dated live tokens, oldest first;
+ *  train on the oldest 66 (test the 29 newest), then on the oldest 80 (test
+ *  the 15 newest). Coverage uses 1.2816 × `looRmse` (the full-model
+ *  implied-basis LOO RMSE) as the fixed scale, the same convention as the
+ *  split coverage in fitValidation. */
+function walkForwardFor(
+  snapshot: Snapshot,
+  variant: AblationVariant,
+  looRmse: number,
+): { folds: WalkForwardFold[]; pooledMedian: number; pooledCoverage: number } {
+  const { live, big, y } = liveDesign(snapshot);
+  const dated = live
+    .map((p, i) => ({ p, i }))
+    .filter((o) => o.p.listed_at !== null)
+    .sort((a, b) => Date.parse(a.p.listed_at!) - Date.parse(b.p.listed_at!));
+  const folds: WalkForwardFold[] = [];
+  const pooled: number[] = [];
+  for (const trainN of [66, 80]) {
+    const train = dated.slice(0, trainN);
+    const test = dated.slice(trainN);
+    const beta = olsBootstrap(
+      train.map((o) => designRow(o.p, big, variant)),
+      train.map((o) => y[o.i]!),
+    );
+    const errs = test.map((o) => Math.abs(y[o.i]! - logImpliedFromBeta(beta, o.p, big, variant, snapshot.as_of)));
+    folds.push({
+      train: trainN,
+      test: test.length,
+      median: median(errs),
+      coverage: errs.filter((e) => e <= Z_90 * looRmse).length / errs.length,
+    });
+    pooled.push(...errs);
+  }
+  return {
+    folds,
+    pooledMedian: median(pooled),
+    pooledCoverage: pooled.filter((e) => e <= Z_90 * looRmse).length / pooled.length,
+  };
+}
+
+/** Walk-forward validation (radar-4 T1): only the 95 dated live tokens;
+ *  the 33 with null `listed_at` are excluded, never imputed. */
+export function walkForward(snapshot: Snapshot): WalkForward {
+  const { live } = liveDesign(snapshot);
+  const loo = looImplied(snapshot, 'full');
+  const dated = live
+    .filter((p) => p.listed_at !== null)
+    .sort((a, b) => Date.parse(a.listed_at!) - Date.parse(b.listed_at!));
+  const wf = walkForwardFor(snapshot, 'full', loo.rmse);
+  return {
+    n: dated.length,
+    n_null_excluded: live.length - dated.length,
+    earliest: dated[0]!.listed_at!,
+    latest: dated[dated.length - 1]!.listed_at!,
+    folds: wf.folds,
+    pooled_median: wf.pooledMedian,
+    pooled_coverage: wf.pooledCoverage,
+    loo_implied_median: loo.median,
+    loo_implied_rmse: loo.rmse,
+  };
+}
+
+/** The drop bar (radar-4 T2): a term is dropped only when removing it
+ *  improves BOTH blind tests (LOO and walk-forward pooled) by more than
+ *  0.05 in median |ln err|. Anything less is not a clear blind-test win. */
+export const DROP_BAR = 0.05;
+
+/** Per-term ablation (radar-4 T2): refit without each term, measure the
+ *  blind tests, and measure the board re-ranking a drop would cause. */
+export function ablation(
+  snapshot: Snapshot,
+  board: BoardRow[],
+  fullLooMedian: number,
+  fullWfPooled: number,
+  fullLooRmse: number,
+): AblationRow[] {
+  const { live, big } = liveDesign(snapshot);
+  const baseRank = new Map(board.map((r) => [r.slug, r.rank]));
+  const baseTop10 = new Set(board.slice(0, 10).map((r) => r.slug));
+  const variants: { key: Exclude<AblationVariant, 'full'>; term: string }[] = [
+    { key: 'no-slope', term: 'slope/size' },
+    { key: 'no-growth', term: 'growth' },
+    { key: 'no-maturity', term: 'maturity' },
+    { key: 'no-cat', term: 'category effects' },
+  ];
+  const signed = (n: number): string => (n >= 0 ? '+' : '') + n.toFixed(4);
+  return variants.map(({ key, term }) => {
+    const loo = looImplied(snapshot, key);
+    const wf = walkForwardFor(snapshot, key, fullLooRmse);
+    // Refit the variant on all 128 live tokens, re-rank the board, measure
+    // how much the ranking would move if the term were dropped.
+    const betaFull = olsBootstrap(
+      live.map((p) => designRow(p, big, key)),
+      live.map((p) => Math.log(p.mcap_usd!)),
+    );
+    const rescored = snapshot.protocols
+      .filter(isBoardEligible)
+      .map((p) => ({
+        slug: p.slug,
+        imp: Math.max(1, Math.round(Math.exp(logImpliedFromBeta(betaFull, p, big, key, snapshot.as_of)))),
+      }))
+      .sort((a, b) => b.imp - a.imp || (a.slug < b.slug ? -1 : 1));
+    let rowsMoved = 0;
+    let maxDisplacement = 0;
+    rescored.forEach((r, i) => {
+      const d = Math.abs(baseRank.get(r.slug)! - (i + 1));
+      if (d > 0) rowsMoved++;
+      maxDisplacement = Math.max(maxDisplacement, d);
+    });
+    const top10Overlap = rescored.slice(0, 10).filter((r) => baseTop10.has(r.slug)).length;
+    const looDelta = loo.median - fullLooMedian;
+    const wfDelta = wf.pooledMedian - fullWfPooled;
+    const decision: 'keep' | 'drop' = looDelta <= -DROP_BAR && wfDelta <= -DROP_BAR ? 'drop' : 'keep';
+    let note: string;
+    if (decision === 'drop') {
+      note = `Both blind tests improve by more than ${DROP_BAR} (LOO ${signed(looDelta)}, walk-forward ${signed(wfDelta)}). Dropped.`;
+    } else if (looDelta > 0 && wfDelta > 0) {
+      note = `Removing it worsens both blind tests (LOO ${signed(looDelta)}, walk-forward ${signed(wfDelta)}). Kept.`;
+    } else if (looDelta < 0 && wfDelta < 0) {
+      note = `Both blind tests improve a little (LOO ${signed(looDelta)}, walk-forward ${signed(wfDelta)}), but less than the ${DROP_BAR} drop bar, and dropping re-ranks ${rowsMoved}/198 rows (max ${maxDisplacement} places). Kept.`;
+    } else {
+      note = `The blind tests disagree (LOO ${signed(looDelta)}, walk-forward ${signed(wfDelta)}), and dropping re-ranks ${rowsMoved}/198 rows (max ${maxDisplacement} places). Kept.`;
+    }
+    return {
+      term,
+      loo_without: loo.median,
+      loo_delta: looDelta,
+      wf_pooled_without: wf.pooledMedian,
+      wf_pooled_delta: wfDelta,
+      decision,
+      rows_moved: rowsMoved,
+      max_displacement: maxDisplacement,
+      top10_overlap: top10Overlap,
+      note,
+    };
+  });
+}
+
+/** The 3 traded-token anchors for one board row (radar-4 T3): same-category
+ *  live tokens first (nearest by |ln TVL ratio|), the shortfall filled with
+ *  the TVL-nearest live tokens of any category. */
+export function compsForRow(
+  category: string | null,
+  tvlUsd: number,
+  live: SnapshotProtocol[],
+): { comps: Comp[]; same_category: number } {
+  const dist = (p: SnapshotProtocol): number => Math.abs(Math.log(tvlUsd / p.tvl_usd));
+  const same = live.filter((p) => p.category === category).sort((a, b) => dist(a) - dist(b));
+  const cross = live.filter((p) => p.category !== category).sort((a, b) => dist(a) - dist(b));
+  const picked = same.slice(0, 3);
+  let i = 0;
+  while (picked.length < 3) picked.push(cross[i++]!);
+  return {
+    comps: picked.map((p) => ({
+      slug: p.slug,
+      name: p.name,
+      tvl_usd: p.tvl_usd,
+      multiple: round6(p.mcap_usd! / p.tvl_usd),
+      same_category: p.category === category,
+    })),
+    same_category: Math.min(3, same.length),
+  };
+}
+
 /** IRLS logistic fit for the odds model (spec D9). Returns the coefficients
  *  and the iteration count. The verify suite carries its own copy. */
 export function irlsOdds(snapshot: Snapshot): { beta: number[]; iters: number } {
@@ -1292,6 +1593,9 @@ export function radarRow(row: BoardRow, watchlist: ReadonlySet<string>): RadarRo
     p90_usd: row.p90_usd,
     rank_lo: row.rank_lo,
     rank_hi: row.rank_hi,
+    stable_refits: row.stable_refits,
+    comps: row.comps,
+    comps_same_category: row.comps_same_category,
     capital_tier: row.capital_tier,
     hold_days: row.hold_days,
     gas_total_usd: row.gas_total_usd,
@@ -1351,10 +1655,21 @@ export function buildRadar(
     r.p90_usd = b.p90_usd;
     r.rank_lo = b.rank_lo;
     r.rank_hi = b.rank_hi;
+    r.stable_refits = b.stable_refits;
+  }
+
+  // Comps anchors (radar-4 T3): 3 nearest traded tokens per row.
+  for (const r of board) {
+    const c = compsForRow(r.category, r.tvl_usd, liveFit);
+    r.comps = c.comps;
+    r.comps_same_category = c.same_category;
   }
 
   // Held-out evidence + horse race (spec D8).
   const val = fitValidation(snapshot);
+  // Walk-forward (T1) + ablation (T2).
+  const wf = walkForward(snapshot);
+  const abl = ablation(snapshot, board, wf.loo_implied_median, wf.pooled_median, wf.loo_implied_rmse);
   const fit: FitMetrics = {
     intercept: FIT.intercept,
     slope: FIT.slope,
@@ -1369,6 +1684,8 @@ export function buildRadar(
     loo_coverage: val.looCoverage,
     split_coverage: val.splitCoverage,
     horse_race: val.horseRace,
+    walk_forward: wf,
+    ablation: abl,
   };
 
   // Odds evidence (spec D9).
