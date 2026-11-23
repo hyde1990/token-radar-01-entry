@@ -824,3 +824,61 @@ disentuh: `dashboard/app.js`, `BUILD.md` (bagian ini + 3 hitungan suite),
   949.306 B, sha `3e1d86ce…`; runtime ~1,0 dtk/run.
 - **Tidak dilakukan (di luar Fase B):** tidak ada push/merge ke main,
   tidak ada bundle/check-submit/submit, tidak ada wallet baru.
+
+## radar-6 (tickets T1–T5, spec radar-6) — 23 Nov 2026, Fase B (build) + Fase E (finisher)
+
+- **Basis:** radar-5 main `b566eb6` (submission `01a20804-…` gate_failed:
+  `sorted_by_value` 0/1 — board radar-5 meranking menurut expected value
+  sambil `implied_value_usd` tetap fitted, rank 1 BitFi implied $53,1M <
+  rank 2 USDD $72,0M). Kit fresh level 38; snapshot sha `42a71213…`
+  (identik radar-5). Branch `radar-6`, build-only; TIDAK submit/bundle.
+  Tidak ada wallet baru, tidak ada secret di repo/log.
+- **T1 implied = fitted × odds:** `implied_value_usd` :=
+  `round(fitted × odds)`; fitted dipertahankan sebagai kolom
+  `value_if_launches_usd`; ranking 1..198 IDENTIK radar-5 (EV top-10:
+  BitFi, USDD, Veda, Steakhouse, Polymarket, Sentora, Cian, OpenTrade,
+  Plume, Tori). Implied rank-1 BitFi Basis $35.830.169 (value if launches
+  $53.107.813, odds 0,675); total implied $785.907.488 (sama persis total
+  EV radar-5); kenaikan implied antar rank 0 (radar-5: 95); verdict tetap
+  FARM 104 / THIN 80 / SKIP 14.
+- **T2 cek gate lokal `sorted_by_value`:** `sortedByValueGate` di
+  `scripts/verify.mjs` meniru RULES.txt baris 25/31 (ranks 1..N sekali,
+  implied tidak naik, tidak semua sama); V27 rollup 7 baris gate
+  (V2/V3/V4/V5/V6/V7/V8) + fixture negatif `tests/fixtures/board-radar5.json`
+  (sha `04d04c8a…`, 95 rises — gate TERBUKTI menangkap cacat radar-5).
+  Suite hijau pada board radar-6, merah pada fixture radar-5.
+- **T3 definisi jujur:** methodology + detail dialog menyatakan verbatim
+  "Implied value = fitted value × launch odds — the expected value of a
+  launch. Implied value is the entry's own claim." KPI strip rank-1
+  menampilkan implied + fitted + odds. Dashboard 64.945 B (html 7.558 +
+  js 47.007 + css 10.380) ≤ 65.000 target (sisa 55 B), hard cap 65.536 B
+  (sisa 591 B). Tabel evidence radar-5 tidak berubah angkanya.
+- **T4 screenshot + titik-tetap F1:** 1440×900 via Playwright Chromium.
+  1-board.png 186.357 B, 2-detail.png 283.368 B, 3-filtered.png 186.784 B.
+  Loop titik-tetap konvergen: dossier 942.456 B → strip 942 KB (margin
+  544 B ke 943.000); retake dari output final byte-identik dengan shot
+  sebelumnya — loop stabil.
+- **T5 verifikasi + review (Fase C/D):** clean-room PASS (0 temuan;
+  recompute independen cocok semua angka anchor; gate PASS radar-6,
+  FAIL 95 rises pada rebuild radar-5). Review Matt NO BLOCKER (4 LOW,
+  kosmetik/internal, diterima terdokumentasi — tidak diperbaiki dengan
+  mengubah kode). Review Sentry NO BLOCKER (2 LOW, sama).
+- **T5 finisher (Fase E, 23 Nov ~18:10–18:30 WIB):** official kit `check`
+  4 passed (competition_open, snapshot, license_osi, entrypoint),
+  1 failed `transcripts_present` (fix = bundle, langkah submit, sudah
+  diketahui dari radar-4/5 — bukan blocker push), 15 skipped,
+  5 checked at submission. `grade-local` menolak by design (EXIT 1):
+  scorer sealed di server. Snapshot sesi mentah 7/7 agent run ini
+  tersalin + terverifikasi sha256 ke
+  `verification/session-snapshot-radar6/` (koordinator, spec checker,
+  builder, clean-room, Matt, Sentry, parent) + salinan sesi finisher
+  (diambil saat sesi masih berjalan — re-copy bila bundle butuh salinan
+  final). README diperbarui ke angka radar-6 (doc-only).
+- **Suites (finisher, rebuild sendiri dari HEAD `00ed76e` + setelah edit
+  doc):** behaviour 47/47, verify 26/26 (V1–V24, V26, V27), hash
+  edge-case all passed, double-run `diff -r` bersih, dossier `cmp`
+  identik. Board hash `40cfd60b…` (522.380 B); dossier 942.456 B,
+  sha `519153b4…`; data.js sha `1a108c83…`.
+- **Tidak dilakukan (di luar Fase E):** tidak ada bundle/check-submit/
+  submit, tidak ada wallet baru. Push ke main dilakukan Fase E setelah
+  README refresh (lihat `verification/fase-e-radar6.md`).
