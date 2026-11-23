@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Radar — pre-token protocols ranked by implied value</title>
+<title>Token Radar — pre-token protocols ranked by expected value</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -15,11 +15,11 @@
   <section class="lede">
     <div>
       <h1>Which pre-token launches would be worth the most?</h1>
-      <p id="lede-text">Every protocol below records no token. The radar ranks them by an implied
-      value fitted to the live-token protocols that already trade — a log-log curve
-      over TVL with a category effect — and gives each one launch odds, an expected
-      value, a bootstrap interval and a farm plan with a cost, a break-even and a
-      verdict. Implied value is a model, not a promise and not a price.</p>
+      <p id="lede-text">Every protocol below records no token. The radar ranks them by expected
+      value — an implied value fitted to the live-token protocols that already trade
+      (a log-log curve over TVL with a category effect), times launch odds — and
+      gives each one a bootstrap interval and a farm plan with a cost, a break-even
+      and a verdict. Expected value is a model, not a promise and not a price.</p>
       <p class="formula" id="formula"></p>
     </div>
     <dl class="facts">
@@ -54,10 +54,15 @@
     <button type="button" class="button" id="clear">Clear filters</button>
   </section>
 
+  <section class="panel evidence" aria-label="Out-of-sample evidence">
+    <h2>Out-of-sample evidence</h2>
+    <div id="evidenceOut"></div>
+  </section>
+
   <section class="panel" aria-label="Ranked board">
     <div class="table-wrap">
       <table id="board">
-        <caption>Pre-token protocols, strongest fitted implied value first. Select a row for its model breakdown, launch odds and farm plan.</caption>
+        <caption>Pre-token protocols, highest expected value first. Select a row for its model breakdown, launch odds and farm plan.</caption>
         <thead><tr>
           <th scope="col"><button type="button" data-sort="rank">Rank</button></th>
           <th scope="col"><button type="button" data-sort="name">Protocol</button></th>

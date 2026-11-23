@@ -1,4 +1,4 @@
-// Token Radar dashboard (radar-3). Reads window.RADAR (written beside
+// Token Radar dashboard (radar-5). Reads window.RADAR (written beside
 // dashboard/ by main.ts) and renders the ranked board, its filters, the
 // per-protocol detail view, the separate live-token section, the KPI /
 // integrity strips, the ledger, the methodology and the model sandbox.
@@ -17,7 +17,7 @@
 
   var state = {
     q: '', category: 'all', chain: 'all', verdict: 'all', watchOnly: false, minTvl: 0,
-    sort: 'implied', dir: -1, selected: null
+    sort: 'rank', dir: 1, selected: null
   };
 
   var money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
@@ -323,7 +323,7 @@
       ['Split coverage', (F.split_coverage * 100).toFixed(1) + '%'],
       ['Verdicts', 'FARM ' + V.FARM + ' / THIN ' + V.THIN + ' / SKIP ' + V.SKIP],
       ['Median odds', DATA.median_odds.toFixed(3)],
-      ['Rank-1 expected value', money.format(DATA.max_ev.value) + ' (' + (maxEvRow ? maxEvRow.name : DATA.max_ev.slug) + ') — expected value, not the implied rank 1'],
+      ['Rank-1 expected value', money.format(DATA.max_ev.value) + ' (' + (maxEvRow ? maxEvRow.name : DATA.max_ev.slug) + ') — board rank 1 by expected value'],
     ];
     items.forEach(function (kv) {
       strip.appendChild(el('div', null, el('dt', { text: kv[0] }), el('dd', { text: kv[1] })));
@@ -333,6 +333,21 @@
       integ.appendChild(el('li', { class: c.pass ? 'pass' : 'fail' },
         el('b', { text: c.pass ? 'PASS' : 'FAIL' }), document.createTextNode(' ' + c.label + ' — ' + c.value)));
     });
+  }
+
+  // Out-of-sample evidence (radar-5 T2): every figure read from DATA at
+  // render time, 2 decimals, no pasted numbers. Ablation LOO/WF are the
+  // blind-test medians with the term removed (implied basis); the drop bar
+  // is 0.05 and no term cleared it, so all are kept.
+  function renderEvidence() {
+    var F = DATA.fit, O = DATA.odds, WF = F.walk_forward;
+    var out = document.getElementById('evidenceOut');
+    out.appendChild(el('p', { text: 'Walk-forward (n=' + WF.n + ', 2 folds): pooled median |ln err| ' + WF.pooled_median.toFixed(2) + ', coverage ' + (WF.pooled_coverage * 100).toFixed(1) + '%. LOO median ' + F.loo_median.toFixed(2) + ', split ' + F.split_median.toFixed(2) + '; coverage LOO ' + (F.loo_coverage * 100).toFixed(1) + '% / split ' + (F.split_coverage * 100).toFixed(1) + '% (target 80%). Odds: AUC ' + O.auc.toFixed(2) + ', Brier ' + O.brier.toFixed(2) + ' (base rate ' + (O.live_share * (1 - O.live_share)).toFixed(2) + ').' }));
+    out.appendChild(miniTable('Ablation — blind-test median |ln err| with each term removed. Drop bar 0.05 on both tests; no term cleared it.',
+      ['Term', 'LOO w/o', 'ΔLOO', 'WF w/o', 'ΔWF', 'Keep?'],
+      F.ablation.map(function (a) {
+        return [a.term, [a.loo_without.toFixed(2), 'num'], [(a.loo_delta >= 0 ? '+' : '') + a.loo_delta.toFixed(2), 'num'], [a.wf_pooled_without.toFixed(2), 'num'], [(a.wf_pooled_delta >= 0 ? '+' : '') + a.wf_pooled_delta.toFixed(2), 'num'], a.decision];
+      })));
   }
 
   function renderLedger() {
@@ -350,7 +365,7 @@
     var F = DATA.fit, O = DATA.odds, A = DATA.assumptions;
     // --- fitted model ---
     var fitDiv = document.getElementById('methodFit');
-    fitDiv.appendChild(el('h3', { text: 'The fitted value model (radar-3)' }));
+    fitDiv.appendChild(el('h3', { text: 'The fitted value model (radar-5)' }));
     fitDiv.appendChild(el('p', { class: 'formula', text: 'log mcap = ' + F.intercept.toFixed(6) + ' + ' + F.slope.toFixed(6) + ' × ln(TVL) + category effect;  multiple = exp(log mcap − ln TVL), clamped to 0.08–0.60;  implied = TVL × multiple × growth × maturity' }));
     fitDiv.appendChild(el('p', { text: 'Fitted, not assumed: a pooled log-log OLS over the ' + F.n + ' live-token protocols with a positive market cap (' + F.df + ' degrees of freedom), outcome ln(market cap), predictors ln(TVL) plus one dummy per category with at least 5 live observations; every other category is pooled into the reference group. Growth and maturity stay the radar-2 terms — the variant that fitted a growth coefficient did worse held out.' }));
     var coefRows = [['Intercept', [F.intercept.toFixed(6), 'num']], ['Slope on ln(TVL)', [F.slope.toFixed(6), 'num']]];
@@ -393,7 +408,7 @@
     var oddsDiv = document.getElementById('methodOdds');
     oddsDiv.appendChild(el('h3', { text: 'Launch odds and expected value' }));
     oddsDiv.appendChild(el('p', { text: 'Odds measure resemblance to protocols that already record a token; the snapshot contains no launch event, so no true launch rate can be estimated from it. They come from a logistic regression on all ' + DATA.ledger.total + ' protocols, outcome “records a token” (' + O.live_share.toFixed(4) + ' do): logit(odds) = ' + O.intercept.toFixed(6) + ' + ' + O.age.toFixed(6) + ' × ln(age) ' + (O.growth >= 0 ? '+' : '−') + ' ' + Math.abs(O.growth).toFixed(6) + ' × growth + ' + O.peer.toFixed(6) + ' × peer logit. Growth is the 7-day change clamped to −40%…+60%, divided by 100; the peer logit is the live share in the protocol’s own category, shrunk toward the overall share with a prior weight of ' + O.prior_weight + ' protocols. Expected value = implied value × odds. Odds are never a forecast that a token will launch, and expected value is never a promised payout.' }));
-    oddsDiv.appendChild(el('p', { text: 'The growth coefficient is negative as fitted: holding age and peer rate fixed, faster growth lowers odds, because the snapshot’s fast growers are young pre-token protocols while established live-token protocols grow slowly. Separation: AUC ' + O.auc.toFixed(4) + '; mean odds ' + O.mean_live.toFixed(3) + ' (records a token) vs ' + O.mean_pre.toFixed(3) + ' (pre-token). The board is ranked by fitted implied value, not expected value: ranking by expected value moves the top 10 only 5/10 against the radar-2 top 10 and displaces one row 143 places, tripping the stability gate — so expected value is a companion column, not the ranking key.' }));
+    oddsDiv.appendChild(el('p', { text: 'The growth coefficient is negative as fitted: holding age and peer rate fixed, faster growth lowers odds, because the snapshot’s fast growers are young pre-token protocols while established live-token protocols grow slowly. Separation: AUC ' + O.auc.toFixed(4) + '; mean odds ' + O.mean_live.toFixed(3) + ' (records a token) vs ' + O.mean_pre.toFixed(3) + ' (pre-token). Brier ' + O.brier.toFixed(4) + ' (base rate ' + (O.live_share * (1 - O.live_share)).toFixed(4) + '). The board is ranked by expected value (fitted value × odds); implied value stays visible as the value-if-launches column.' }));
 
     // --- bootstrap ---
     var bootDiv = document.getElementById('methodBoot');
@@ -407,7 +422,7 @@
     farmDiv.appendChild(el('h3', { text: 'Farm plans and their netting' }));
     var costs = DATA.rows.map(function (r) { return r.farm_cost_usd; });
     var dph = DATA.rows.map(function (r) { return r.dollars_per_hour; });
-    farmDiv.appendChild(el('p', { text: 'Each plan is 7 steps shaped by the protocol’s category family, primary chain, capital tier ($250 / $150 / $100 / $50 from TVL) and hold time (60 / 45 / 30 days from age). Netting is computed from tier and hold, never by parsing the step text: gas = $3 + 2 × gas core ($8 at $150+ capital, $4 below) + $2 per week of hold; opportunity cost prices locked capital at an assumed ' + (A.opportunity_rate * 100).toFixed(0) + '% per year; total cost = gas + opportunity (range ' + fmtUsd(Math.min.apply(null, costs)) + '–' + fmtUsd(Math.max.apply(null, costs)) + '). Break-even share = total cost ÷ expected value. Verdict: FARM when the share is at most ' + A.verdict_farm + ' (expected value covers cost at least 100,000×), THIN at most ' + A.verdict_thin + ' (at least 10,000×), else SKIP. $/hour assumes the farmer captures ' + (A.allocation_share * 100).toFixed(3) + '% of expected value: proceeds = expected value × ' + (A.allocation_share * 100).toFixed(3) + '%, net = proceeds − total cost, $/hour = net ÷ active hours (hold days excluded). $/hour is a screening figure under that assumption, not a promised income — change it in the sandbox and it moves. Median $/hour is $' + Math.round(median(dph)).toLocaleString() + ' (range $' + Math.round(Math.min.apply(null, dph)).toLocaleString() + ' to $' + Math.round(Math.max.apply(null, dph)).toLocaleString() + ').' }));
+    farmDiv.appendChild(el('p', { text: 'Each plan is 7 steps shaped by the protocol’s category family, primary chain, capital tier ($250 / $150 / $100 / $50 from TVL) and hold time (60 / 45 / 30 days from age). Netting is computed from tier and hold, never by parsing the step text: gas = $3 + 2 × gas core ($8 at $150+ capital, $4 below) + $2 per week of hold; opportunity cost prices locked capital at an assumed ' + (A.opportunity_rate * 100).toFixed(0) + '% per year; total cost = gas + opportunity (range ' + fmtUsd(Math.min.apply(null, costs)) + '–' + fmtUsd(Math.max.apply(null, costs)) + '). Break-even share = total cost ÷ expected value. Verdict: FARM when the share is at most ' + A.verdict_farm + ' (expected value covers cost at least 100,000×), THIN at most ' + A.verdict_thin + ' (at least 10,000×), else SKIP. $/hour assumes the farmer captures ' + (A.allocation_share * 100).toFixed(3) + '% of expected value: proceeds = expected value × ' + (A.allocation_share * 100).toFixed(3) + '%, net = proceeds − total cost, $/hour = net ÷ active hours (hold days excluded). $/hour is a screening figure under that assumption, not a promised income — change it in the sandbox and it moves. Median $/hour is $' + Math.round(median(dph)).toLocaleString() + ' (range $' + Math.round(Math.min.apply(null, dph)).toLocaleString() + ' to $' + Math.round(Math.max.apply(null, dph)).toLocaleString() + '). The FARM bar was reviewed (radar-5): a $/hour ≥ $25 + net-beats-T-bill candidate gives the same 104 rows, so the bar is kept.' }));
 
     // --- ledger ---
     var ledDiv = document.getElementById('methodLedger');
@@ -449,12 +464,12 @@
     var scored = DATA.rows.map(function (r) {
       return { row: r, imp: sandboxImplied(r, slope), ev: sandboxImplied(r, slope) * r.odds };
     });
-    scored.sort(function (a, b) { return b.imp - a.imp || (a.row.slug < b.row.slug ? -1 : 1); });
+    scored.sort(function (a, b) { return b.ev - a.ev || (a.row.slug < b.row.slug ? -1 : 1); });
     var top = document.getElementById('sandboxTop10');
     top.textContent = '';
     scored.slice(0, 10).forEach(function (s, i) {
       top.appendChild(el('li', null,
-        el('b', { text: s.row.name }), document.createTextNode(' — ' + fmtUsd(s.imp) + ' (locked rank ' + s.row.rank + ')')));
+        el('b', { text: s.row.name }), document.createTextNode(' — ' + fmtUsd(s.ev) + ' EV (locked rank ' + s.row.rank + ')')));
     });
     var nets = DATA.rows.map(function (r) {
       var ev = sandboxImplied(r, slope) * r.odds;
@@ -473,7 +488,7 @@
     document.getElementById('sandboxNote').textContent =
       'The sliders recompute the displayed values only; the submitted board is the locked ' + DATA.model_version + ' board, and no slider rewrites it or persists into board.json. Verdicts are set by the break-even ratio and do not move with allocation; net $/hour does.';
     document.getElementById('sandboxLock').textContent =
-      'Locked board: fitted implied value at slope b = ' + DATA.fit.slope.toFixed(6) + ', 0.01% allocation for $/hour. The sandbox shows the same rows under a different slope or allocation.';
+      'Locked board: expected value (implied × odds) at slope b = ' + DATA.fit.slope.toFixed(6) + ', 0.01% allocation for $/hour. The sandbox shows the same rows under a different slope or allocation.';
     var slopeEl = document.getElementById('slopeSlider');
     var allocEl = document.getElementById('allocSlider');
     slopeEl.value = String(DATA.fit.slope);
@@ -607,7 +622,7 @@
     document.getElementById('fact-early').textContent = String(DATA.early_size);
     document.getElementById('fact-live').textContent = String(DATA.live_size);
     document.getElementById('formula').textContent =
-      'implied = TVL × fitted multiple (log-log OLS, slope ' + DATA.fit.slope.toFixed(6) + ') × growth × maturity — ' + DATA.model_version + ', snapshot ' + DATA.as_of +
+      'expected = implied × odds (the ranking key); implied = TVL × fitted multiple (log-log OLS, slope ' + DATA.fit.slope.toFixed(6) + ') × growth × maturity — ' + DATA.model_version + ', snapshot ' + DATA.as_of +
       '. Board: ' + DATA.board_size + ' rows (' + DATA.watchlist_size + ' watchlist + ' + DATA.early_size + ' early).';
     document.getElementById('src').textContent =
       'Source: ' + (DATA.source ? DATA.source.split(' ')[0] : 'DefiLlama') + ' protocol index, snapshot ' + DATA.as_of + '.';
@@ -632,6 +647,7 @@
   initHeader();
   initControls();
   renderKpi();
+  renderEvidence();
   renderLedger();
   renderMethod();
   initSandbox();
