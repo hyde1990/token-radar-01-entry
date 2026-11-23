@@ -44,6 +44,14 @@
   function fmtRange(lo, hi) {
     return fmtUsd(lo) + '–' + fmtUsd(hi);
   }
+  // Collapsed bootstrap intervals (P10 = P90) are shown as the measured
+  // refit count, never as two identical bounds (radar-4 T4).
+  function fmtInterval(r) {
+    if (r.stable_refits !== null && r.stable_refits !== undefined) {
+      return 'stable in ' + r.stable_refits + '/' + DATA.assumptions.bootstrap_b + ' refits';
+    }
+    return fmtRange(r.p10_usd, r.p90_usd);
+  }
   function median(xs) {
     var s = xs.slice().sort(function (a, b) { return a - b; });
     var m = s.length >> 1;
@@ -237,7 +245,7 @@
         )),
         el('td', { class: 'num', text: fmtOdds(r.odds) }),
         el('td', { class: 'num', text: fmtUsd(r.expected_value_usd) }),
-        el('td', { class: 'num interval', text: fmtRange(r.p10_usd, r.p90_usd) }),
+        el('td', { class: 'num interval', text: fmtInterval(r) }),
         el('td', { class: 'num', text: r.rank_lo + '–' + r.rank_hi }),
         el('td', null, el('span', { class: 'verdict v-' + r.verdict.toLowerCase(), text: r.verdict }))
       );
@@ -311,6 +319,7 @@
       ['Excluded pre-token', String(L.excluded_pre)],
       ['Live-token', L.live + ' (' + L.live_shown + ' shown)'],
       ['LOO median |ln err|', F.loo_median.toFixed(2)],
+      ['Walk-forward median |ln err|', F.walk_forward.pooled_median.toFixed(2) + ' (n=' + F.walk_forward.n + ', 2 folds)'],
       ['Split coverage', (F.split_coverage * 100).toFixed(1) + '%'],
       ['Verdicts', 'FARM ' + V.FARM + ' / THIN ' + V.THIN + ' / SKIP ' + V.SKIP],
       ['Median odds', DATA.median_odds.toFixed(3)],
@@ -370,6 +379,15 @@
         return [h.variant, [h.loo_median.toFixed(4), 'num'], [h.loo_rmse.toFixed(4), 'num'], [h.split_median.toFixed(4), 'num']];
       })));
     fitDiv.appendChild(el('p', { text: 'Held-out evidence for the fitted model: LOO median |ln err| ' + F.loo_median.toFixed(4) + ', LOO RMSE ' + F.loo_rmse.toFixed(4) + ', 70/30 split median |ln err| ' + F.split_median.toFixed(4) + ' (seed ' + A.split_seed + ', test = first 38 of the seeded shuffle), R² ' + F.r2.toFixed(4) + ', residual SD ' + F.resid_sd.toFixed(4) + '. P10–P90 coverage is ' + (F.loo_coverage * 100).toFixed(1) + '% (LOO) and ' + (F.split_coverage * 100).toFixed(1) + '% (split) against a target of 80%. Honest limit: the fit is weak in absolute terms (R² 0.25; a typical live token’s market cap is mispredicted by a factor of e^' + F.loo_median.toFixed(2) + ' ≈ 3.6 at the LOO median). It beats the median model; it does not predict market cap precisely.' }));
+    // --- walk-forward + ablation (radar-4) ---
+    var WF = F.walk_forward;
+    fitDiv.appendChild(el('p', { text: 'Walk-forward validation: the ' + WF.n + ' live-token protocols with a listed date (' + WF.n_null_excluded + ' record no date and are excluded, never imputed; ' + WF.earliest + ' to ' + WF.latest + ') are ordered oldest first. Fitting on the oldest ' + WF.folds[0].train + ' and testing the ' + WF.folds[0].test + ' newest gives median |ln err| ' + WF.folds[0].median.toFixed(4) + ' (coverage ' + (WF.folds[0].coverage * 100).toFixed(1) + '%); fitting on the oldest ' + WF.folds[1].train + ' and testing the ' + WF.folds[1].test + ' newest gives ' + WF.folds[1].median.toFixed(4) + ' (coverage ' + (WF.folds[1].coverage * 100).toFixed(1) + '%). Pooled over both folds (' + (WF.folds[0].test + WF.folds[1].test) + ' test predictions; the 15 newest are counted in both folds) the median is ' + WF.pooled_median.toFixed(4) + ' (coverage ' + (WF.pooled_coverage * 100).toFixed(1) + '%). The comparable leave-one-out median on the same implied basis (clamped multiple) is ' + WF.loo_implied_median.toFixed(4) + '. The second fold is worse than the first — reported as measured, not as a pass.' }));
+    fitDiv.appendChild(miniTable('Ablation — blind-test median |ln err| with each term removed (implied basis, clamped multiple). A term is dropped only when removing it improves both blind tests by more than the drop bar; no term cleared it, so every term is kept and the ranking is unchanged.',
+      ['Term', 'LOO without', 'Δ LOO', 'Walk-forward pooled without', 'Decision'],
+      F.ablation.map(function (a) {
+        return [a.term, [a.loo_without.toFixed(4), 'num'], [(a.loo_delta >= 0 ? '+' : '') + a.loo_delta.toFixed(4), 'num'], [a.wf_pooled_without.toFixed(4), 'num'], a.decision];
+      })));
+    fitDiv.appendChild(el('p', { text: F.ablation.map(function (a) { return a.term + ': ' + a.note; }).join(' ') }));
 
     // --- launch odds ---
     var oddsDiv = document.getElementById('methodOdds');
@@ -490,7 +508,7 @@
         ['Implied value', [money.format(ra.implied_value_usd), 'num'], [money.format(rb.implied_value_usd), 'num']],
         ['Odds', [fmtOdds(ra.odds), 'num'], [fmtOdds(rb.odds), 'num']],
         ['Expected value', [money.format(ra.expected_value_usd), 'num'], [money.format(rb.expected_value_usd), 'num']],
-        ['P10–P90', [fmtRange(ra.p10_usd, ra.p90_usd), 'num'], [fmtRange(rb.p10_usd, rb.p90_usd), 'num']],
+        ['P10–P90', [fmtInterval(ra), 'num'], [fmtInterval(rb), 'num']],
         ['Rank range', [(ra.rank_lo + '–' + ra.rank_hi), 'num'], [(rb.rank_lo + '–' + rb.rank_hi), 'num']],
         ['Verdict', ra.verdict, rb.verdict],
         ['Farm cost', [money.format(ra.farm_cost_usd), 'num'], [money.format(rb.farm_cost_usd), 'num']],
@@ -547,13 +565,21 @@
       el('p', { text: multLine + '. The curve is log mcap = ' + m.intercept + ' + ' + m.slope + ' × ln(TVL) + category effect, fitted to the ' + DATA.fit.n + ' live-token protocols; the D1r median multiple for this category (' + m.d1r_multiple + ') is the fallback. ' + growthWord + ' Maturity multiplier ' + m.maturity_multiplier + ' rewards ' + fmtAge(row.age_days) + ' of life with no token on record. The fit is weak in absolute terms (R² ' + DATA.fit.r2.toFixed(2) + ') — see Methodology.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
+      el('h3', { text: 'Anchored by traded tokens' }),
+      el('p', { text: 'The implied value is anchored to the three traded tokens nearest in TVL' + (row.comps_same_category < 3 ? ' — only ' + row.comps_same_category + ' of the 3 share this category, the rest are the TVL-nearest tokens of any category.' : ', all three in this category.') }),
+      el('ul', { class: 'comps' }, row.comps.map(function (c) {
+        return el('li', null, el('b', { text: c.name }),
+          document.createTextNode(' — mcap/TVL ' + c.multiple + (c.same_category ? ' (same category)' : ' (other category)') + ', TVL ' + fmtUsd(c.tvl_usd)));
+      }))
+    ));
+    dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Launch odds and expected value' }),
       el('p', { text: 'Odds ' + fmtOdds(row.odds) + ' — a peer-resemblance score, not a forecast that a token will launch. Expected value ' + money.format(row.expected_value_usd) + ' = implied value × odds.' }),
       el('p', { text: 'Odds inputs: ln(age ' + (row.age_days === null ? '365 (unknown)' : row.age_days + 'd') + ') = ' + Math.log(row.age_days === null ? 365 : row.age_days).toFixed(3) + '; growth term ' + (row.change_7d === null ? '0' : (Math.min(60, Math.max(-40, row.change_7d)) / 100).toFixed(3)) + '; peer rate in this category ' + (row.peer_shrunk * 100).toFixed(1) + '% (shrunk), peer logit ' + row.peer_logit.toFixed(3) + '. The snapshot holds no launch event, so no true launch rate can be estimated.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Uncertainty (bootstrap)' }),
-      el('p', { text: 'P10–P90 ' + fmtRange(row.p10_usd, row.p90_usd) + (row.p10_usd === row.p90_usd ? ' — at clamp bound: the fitted multiple sits at the clamp bound in nearly every refit, so the interval is degenerate; the rank range beside it is the computed range, narrow for the top rows.' : '.') + ' Rank range ' + row.rank_lo + '–' + row.rank_hi + ' across ' + DATA.assumptions.bootstrap_b + ' refits. Wide ranges are shown as computed, never shrunk.' })
+      el('p', { text: (row.stable_refits !== null && row.stable_refits !== undefined ? 'P10–P90 stable in ' + row.stable_refits + '/' + DATA.assumptions.bootstrap_b + ' refits — the fitted multiple sits at the clamp bound in nearly every refit, so the interval is degenerate; the rank range beside it is the computed range, narrow for the top rows.' : 'P10–P90 ' + fmtRange(row.p10_usd, row.p90_usd) + '.') + ' Rank range ' + row.rank_lo + '–' + row.rank_hi + ' across ' + DATA.assumptions.bootstrap_b + ' refits. Wide ranges are shown as computed, never shrunk.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan — 7 steps' }),

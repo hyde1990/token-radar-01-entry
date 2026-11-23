@@ -24,7 +24,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SNAPSHOT = '/home/hatch/workspace/makefun/scout-2026-11-21/kits/token-radar-01/input/snapshot.json'
+SNAPSHOT = '/home/hatch/workspace/makefun/token-radar/kit-fresh/token-radar-01-kit/input/snapshot.json'
 
 failures = []
 

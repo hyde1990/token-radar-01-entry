@@ -716,3 +716,43 @@ disentuh: `dashboard/app.js`, `BUILD.md` (bagian ini + 3 hitungan suite),
 - **Angka model/board TIDAK berubah:** top-10, verdict FARM 104 / THIN 80 /
   SKIP 14, LOO 1.2908, R² 0.2493, AUC 0.7647, EV maks $35,830,169 —
   semuanya sama; V15–V21 recompute independen tetap lolos.
+
+## radar-4 (tickets T1–T5, spec radar-4 + amendment Fase A) — 23 Nov 2026, Fase B (build)
+
+- **Built:** branch `radar-4` dari HEAD `2cdce26`. Model commit `8e5f420`
+  (T1–T4 model + behaviour), dashboard/screenshot commit menyusul. Status:
+  BUILD ONLY — NO submit, NO bundle, NO check-submit, NO push, NO wallet baru.
+  Kit fresh level 38; snapshot byte-identik dengan kit 21 Nov (sha `42a71213…`).
+- **T1 walk-forward (n=95 dated live, 33 null excluded, tanpa imputasi):**
+  lipatan 66/29 median 1.2004 coverage 79.3%; lipatan 80/15 median 2.2077
+  coverage 73.3%; gabungan (44 prediksi, 15 termuda di kedua lipatan) median
+  1.2509 coverage 77.3%; LOO implied-basis (clamped) 1.2490. Basis = implied
+  dengan clamp 0.08–0.60 (41/128 live-token di luar clamp) — versi pertama
+  tanpa clamp memberi angka berbeda (gabungan 1.3779) dan diperbaiki setelah
+  script recompute kedua menangkapnya (lihat
+  `verification/build-log-radar4.md` §0).
+- **T2 ablasi (LOO / WF gabungan, full 1.2490 / 1.2509; drop bar 0.05):**
+  slope/size 1.2006 / 1.3403, growth 1.3106 / 1.3183, maturity 1.2387 / 1.3542,
+  category effects 1.2434 / 1.2126 — semua KEEP, tidak ada term lolos bar.
+  Board ranking TIDAK berubah; top-10 dan verdict (FARM 104 / THIN 80 /
+  SKIP 14) sama dengan radar-3.1.
+- **T3 comps:** 3 traded-token terdekat per baris (|ln TVL ratio|,
+  se-kategori dulu, TVL terdekat lintas kategori); 102/198 baris butuh
+  fallback (18 dengan 0 se-kategori). Dialog detail menampilkan "Anchored by".
+- **T4:** 5 baris p10==p90 menampilkan "stable in N/200 refits" dengan N
+  terukur (steakhouse 198, sentora 198, gauntlet 197, veda 196, usdd 188) —
+  bukan 200/200. Angka bootstrap di data.js tidak berubah.
+- **T5:** dashboard 62.906 B (html 7.520 + js 45.081 + css 10.305) ≤ 65.000 B
+  target. Screenshot di-render ulang 1440×900 (BUKAN 1280×720: RULES.txt
+  level 38 mensyaratkan short side ≥ 800 px, jadi 720 px akan gagal gate):
+  1-board.png 180.283 B, 2-detail.png 283.347 B, 3-filtered.png 182.246 B.
+- **Suites:** behaviour 41/41, verify 25/25 (V1–V21 + V22 walk-forward,
+  V23 ablasi, V24 comps, V25 dashboard DOM), hash edge-case 10/10,
+  double-run `diff -r` bersih. Board hash `78704c86…` (516.059 B — berubah
+  dari radar-3.1 `5d414252…` hanya karena field baru comps/stable_refits;
+  ranking + implied values byte-identik). Dossier 926.214 B, sha `bb1cb93a…`.
+- **Aturan env-secret (RULES.txt level 38):** grep bersih — tidak ada
+  eval/Function/vm/dynamic import di kode entry; satu-satunya `process.env`
+  adalah `main.ts` membaca `MAKEFUN_OUTPUT_DIR` sebagai path (diizinkan).
+- **Tidak dilakukan (di luar Fase B):** README tidak diubah (Fase E),
+  tidak ada bundle/check-submit/submit/push.

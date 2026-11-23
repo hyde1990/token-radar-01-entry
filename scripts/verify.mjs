@@ -30,7 +30,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(join(dirname(fileURLToPath(import.meta.url)), '..'));
-const KIT_SNAPSHOT = '/home/hatch/workspace/makefun/scout-2026-11-21/kits/token-radar-01/input/snapshot.json';
+const KIT_SNAPSHOT = '/home/hatch/workspace/makefun/token-radar/kit-fresh/token-radar-01-kit/input/snapshot.json';
 const MAIN = join(ROOT, 'main.ts');
 const VENDOR = join(ROOT, 'vendor', 'makefun-board.ts');
 
@@ -465,6 +465,9 @@ let DATA = null; // parsed data.js payload (set by V10)
       || r.model.slope !== FIT.slope) problems.push(`${r.slug}: fitted model breakdown missing or constants wrong`);
     if (r.model && r.model.base_multiple !== undefined) problems.push(`${r.slug}: D1r base_multiple leaked into the fitted breakdown`);
     for (const f of NEW_FIELDS) if (typeof r[f] !== 'number') problems.push(`${r.slug}: radar-3 field ${f} missing`);
+    if (!Array.isArray(r.comps) || r.comps.length !== 3) problems.push(`${r.slug}: comps not exactly 3`);
+    if (typeof r.comps_same_category !== 'number' || r.comps_same_category < 0 || r.comps_same_category > 3) problems.push(`${r.slug}: comps_same_category ${r.comps_same_category}`);
+    if (!(r.stable_refits === null || (typeof r.stable_refits === 'number' && r.stable_refits >= 0 && r.stable_refits <= 200))) problems.push(`${r.slug}: stable_refits ${r.stable_refits}`);
     if (typeof r.verdict !== 'string' || !['FARM', 'THIN', 'SKIP'].includes(r.verdict)) problems.push(`${r.slug}: verdict ${r.verdict}`);
     if (typeof r.odds === 'number' && !(r.odds > 0 && r.odds < 1)) problems.push(`${r.slug}: odds ${r.odds} outside (0,1)`);
     if (typeof r.p10_usd === 'number' && typeof r.p90_usd === 'number'
@@ -559,8 +562,8 @@ let DATA = null; // parsed data.js payload (set by V10)
   const files = walkFiles(dashDir);
   const total = Object.values(files).reduce((n, s) => n + (s > 0 ? s : 0), 0);
   const parts = Object.entries(files).map(([f, s]) => `${f} ${s} B`).join(', ');
-  record('V9 dashboard source size', total <= 60_000,
-    `${total} B total (${parts}); target ≤60,000 B, hard cap 65,536 B — ${total <= 60_000 ? 'within target' : total <= 65536 ? 'OVER TARGET but within hard cap' : 'OVER HARD CAP'}`);
+  record('V9 dashboard source size', total <= 65_000,
+    `${total} B total (${parts}); target ≤65,000 B, hard cap 65,536 B — ${total <= 65_000 ? 'within target' : total <= 65536 ? 'OVER TARGET but within hard cap' : 'OVER HARD CAP'}`);
 }
 
 // ---------------------------------------------------------------- V10
@@ -578,7 +581,7 @@ let DATA = null; // parsed data.js payload (set by V10)
     d.rows.forEach((r, i) => {
       if (rows[i] && (r.slug !== rows[i].slug || r.rank !== rows[i].rank || r.implied_value_usd !== rows[i].implied_value_usd)) mism.push(`row ${i + 1}: ${r.slug}/${r.implied_value_usd} vs ${rows[i].slug}/${rows[i].implied_value_usd}`);
     });
-    if (d.model_version !== 'radar-3') mism.push(`model_version ${d.model_version}, expect radar-3`);
+    if (d.model_version !== 'radar-4') mism.push(`model_version ${d.model_version}, expect radar-4`);
     for (const k of ['fit', 'odds', 'ledger', 'assumptions', 'verdict_counts', 'median_odds', 'max_ev']) {
       if (d[k] === undefined) mism.push(`data.js missing ${k}`);
     }
@@ -993,6 +996,225 @@ print(json.dumps(res))
   if (splitCoverage !== DATA.fit.split_coverage) problems.push(`split coverage ${splitCoverage} vs payload ${DATA.fit.split_coverage}`);
   record('V21 LOO / split / coverage recompute', problems.length === 0,
     `LOO median ${looMedian.toFixed(4)} RMSE ${looRmse.toFixed(4)} coverage ${(looCoverage * 100).toFixed(1)}%; split (seed ${SPLIT_SEED}, test = first 38) median ${splitMedian.toFixed(4)} coverage ${(splitCoverage * 100).toFixed(1)}%; problems: ${problems.join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- V22–V24 (radar-4: walk-forward, ablation, comps)
+// Independent recompute of the radar-4 evidence, written here from the
+// spec/amendment — never imported from lib/. The implied basis applies the
+// shipped 0.08–0.60 clamp to the fitted multiple (see build-log-radar4.md
+// §0: the unclamped basis gave different numbers and was corrected).
+function designRowV(p, big, variant) {
+  if (variant === 'no-cat') return [1, Math.log(p.tvl_usd)];
+  if (variant === 'no-slope') return [1, ...big.map((c) => (p.category === c ? 1 : 0))];
+  return [1, Math.log(p.tvl_usd), ...big.map((c) => (p.category === c ? 1 : 0))];
+}
+function logImpliedPredV(beta, p, asOf, big, variant) {
+  const raw = Math.exp(dotV(designRowV(p, big, variant), beta) - Math.log(p.tvl_usd));
+  const mult = clamp(raw, FIT.floor, FIT.cap);
+  const gm = growthMaturityV(p, asOf);
+  let lp = Math.log(p.tvl_usd) + Math.log(mult);
+  if (variant !== 'no-growth') lp += Math.log(gm.growthMult);
+  if (variant !== 'no-maturity') lp += Math.log(gm.maturityMult);
+  return lp;
+}
+function looImpliedV(snapshot, variant) {
+  const { live, big, y } = liveDesignV(snapshot);
+  const Xv = live.map((p) => designRowV(p, big, variant));
+  const errs = [];
+  for (let h = 0; h < live.length; h++) {
+    const beta = olsBootstrapV(Xv.filter((_, i) => i !== h), y.filter((_, i) => i !== h));
+    errs.push(Math.abs(y[h] - logImpliedPredV(beta, live[h], snapshot.as_of, big, variant)));
+  }
+  return { median: median(errs), rmse: Math.sqrt(errs.reduce((s, e) => s + e * e, 0) / errs.length) };
+}
+function walkForwardV(snapshot, variant, looRmse) {
+  const { live, big, y } = liveDesignV(snapshot);
+  const dated = live.map((p, i) => ({ p, i })).filter((o) => o.p.listed_at !== null)
+    .sort((a, b) => Date.parse(a.p.listed_at) - Date.parse(b.p.listed_at));
+  const folds = [];
+  const pooled = [];
+  for (const trainN of [66, 80]) {
+    const train = dated.slice(0, trainN);
+    const test = dated.slice(trainN);
+    const beta = olsBootstrapV(train.map((o) => designRowV(o.p, big, variant)), train.map((o) => y[o.i]));
+    const errs = test.map((o) => Math.abs(y[o.i] - logImpliedPredV(beta, o.p, snapshot.as_of, big, variant)));
+    folds.push({ train: trainN, test: test.length, median: median(errs), coverage: errs.filter((e) => e <= Z_90 * looRmse).length / errs.length });
+    pooled.push(...errs);
+  }
+  return { folds, pooledMedian: median(pooled), pooledCoverage: pooled.filter((e) => e <= Z_90 * looRmse).length / pooled.length };
+}
+
+// ---------------------------------------------------------------- V22 (walk-forward recompute)
+{
+  const wf = DATA.fit.walk_forward;
+  const { live } = liveDesignV(snapshot);
+  const dated = live.filter((p) => p.listed_at !== null);
+  const loo = looImpliedV(snapshot, 'full');
+  const recomputed = walkForwardV(snapshot, 'full', loo.rmse);
+  const problems = [];
+  if (wf.n !== 95) problems.push(`n ${wf.n}, expect 95`);
+  if (wf.n_null_excluded !== 33) problems.push(`null-excluded ${wf.n_null_excluded}, expect 33`);
+  if (wf.earliest !== '2021-10-21' || wf.latest !== '2026-08-26') problems.push(`range ${wf.earliest}→${wf.latest}, expect 2021-10-21→2026-08-26`);
+  recomputed.folds.forEach((f, i) => {
+    const w = wf.folds[i];
+    if (!w || w.train !== f.train || w.test !== f.test) problems.push(`fold ${i + 1} train/test ${w?.train}/${w?.test} vs ${f.train}/${f.test}`);
+    if (Math.abs(w.median - f.median) > 0.0005) problems.push(`fold ${i + 1} median ${w.median.toFixed(4)} vs recomputed ${f.median.toFixed(4)}`);
+    if (Math.abs(w.coverage - f.coverage) > 1e-9) problems.push(`fold ${i + 1} coverage ${w.coverage} vs recomputed ${f.coverage}`);
+  });
+  if (Math.abs(wf.pooled_median - recomputed.pooledMedian) > 0.0005) problems.push(`pooled median ${wf.pooled_median.toFixed(4)} vs recomputed ${recomputed.pooledMedian.toFixed(4)}`);
+  if (Math.abs(wf.pooled_coverage - recomputed.pooledCoverage) > 1e-9) problems.push(`pooled coverage ${wf.pooled_coverage} vs recomputed ${recomputed.pooledCoverage}`);
+  if (Math.abs(wf.loo_implied_median - loo.median) > 0.0005) problems.push(`LOO-implied median ${wf.loo_implied_median.toFixed(4)} vs recomputed ${loo.median.toFixed(4)}`);
+  if (Math.abs(wf.loo_implied_rmse - loo.rmse) > 0.0005) problems.push(`LOO-implied RMSE ${wf.loo_implied_rmse.toFixed(4)} vs recomputed ${loo.rmse.toFixed(4)}`);
+  record('V22 walk-forward recompute', problems.length === 0,
+    `n=${wf.n} dated live (33 null excluded), range ${wf.earliest}→${wf.latest}; fold 66/29 median ${recomputed.folds[0].median.toFixed(4)} cov ${(recomputed.folds[0].coverage * 100).toFixed(1)}%, fold 80/15 median ${recomputed.folds[1].median.toFixed(4)} cov ${(recomputed.folds[1].coverage * 100).toFixed(1)}%, pooled ${recomputed.pooledMedian.toFixed(4)} cov ${(recomputed.pooledCoverage * 100).toFixed(1)}%, LOO-implied ${loo.median.toFixed(4)}; problems: ${problems.join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- V23 (ablation recompute)
+{
+  const ab = DATA.fit.ablation;
+  const wf = DATA.fit.walk_forward;
+  const { live, big } = liveDesignV(snapshot);
+  const baseRank = new Map(rows.map((r) => [r.slug, r.rank]));
+  const baseTop10 = new Set(rows.slice(0, 10).map((r) => r.slug));
+  const variants = [
+    { key: 'no-slope', term: 'slope/size' },
+    { key: 'no-growth', term: 'growth' },
+    { key: 'no-maturity', term: 'maturity' },
+    { key: 'no-cat', term: 'category effects' },
+  ];
+  const problems = [];
+  const details = [];
+  for (const { key, term } of variants) {
+    const row = ab.find((r) => r.term === term);
+    if (!row) { problems.push(`ablation row missing for ${term}`); continue; }
+    const loo = looImpliedV(snapshot, key);
+    const wfv = walkForwardV(snapshot, key, wf.loo_implied_rmse);
+    const betaFull = olsBootstrapV(live.map((p) => designRowV(p, big, key)), live.map((p) => Math.log(p.mcap_usd)));
+    const rescored = snapshot.protocols.filter(isBoardEligibleV)
+      .map((p) => ({ slug: p.slug, imp: Math.max(1, Math.round(Math.exp(logImpliedPredV(betaFull, p, snapshot.as_of, big, key)))) }))
+      .sort((a, b) => b.imp - a.imp || (a.slug < b.slug ? -1 : 1));
+    let rowsMoved = 0;
+    let maxDisp = 0;
+    rescored.forEach((r, i) => {
+      const d = Math.abs(baseRank.get(r.slug) - (i + 1));
+      if (d > 0) rowsMoved++;
+      maxDisp = Math.max(maxDisp, d);
+    });
+    const top10 = rescored.slice(0, 10).filter((r) => baseTop10.has(r.slug)).length;
+    const looDelta = loo.median - wf.loo_implied_median;
+    const wfDelta = wfv.pooledMedian - wf.pooled_median;
+    const decision = looDelta <= -0.05 && wfDelta <= -0.05 ? 'drop' : 'keep';
+    if (Math.abs(row.loo_without - loo.median) > 0.0005) problems.push(`${term}: LOO without ${row.loo_without.toFixed(4)} vs recomputed ${loo.median.toFixed(4)}`);
+    if (Math.abs(row.wf_pooled_without - wfv.pooledMedian) > 0.0005) problems.push(`${term}: WF pooled without ${row.wf_pooled_without.toFixed(4)} vs recomputed ${wfv.pooledMedian.toFixed(4)}`);
+    if (row.rows_moved !== rowsMoved) problems.push(`${term}: rows_moved ${row.rows_moved} vs recomputed ${rowsMoved}`);
+    if (row.max_displacement !== maxDisp) problems.push(`${term}: max_displacement ${row.max_displacement} vs recomputed ${maxDisp}`);
+    if (row.top10_overlap !== top10) problems.push(`${term}: top10_overlap ${row.top10_overlap} vs recomputed ${top10}`);
+    if (row.decision !== decision) problems.push(`${term}: decision ${row.decision} vs rule ${decision}`);
+    if (row.decision !== 'keep') problems.push(`${term}: decision is ${row.decision}, expect keep (no term cleared the 0.05 bar)`);
+    details.push(`${term}: LOO ${loo.median.toFixed(4)} (Δ ${looDelta >= 0 ? '+' : ''}${looDelta.toFixed(4)}), WF ${wfv.pooledMedian.toFixed(4)} (Δ ${wfDelta >= 0 ? '+' : ''}${wfDelta.toFixed(4)}), moved ${rowsMoved}/198 max ${maxDisp}, top-10 ${top10}/10, ${row.decision}`);
+  }
+  record('V23 ablation recompute', problems.length === 0,
+    `${details.join(' || ')}; problems: ${problems.join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- V24 (comps recompute)
+{
+  const livePos = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0);
+  const bySlug = new Map(snapshot.protocols.map((p) => [p.slug, p]));
+  const problems = [];
+  let fallbackRows = 0;
+  const dist = (tvl, p) => Math.abs(Math.log(tvl / p.tvl_usd));
+  for (const r of rows) {
+    const same = livePos.filter((p) => p.category === r.category).sort((a, b) => dist(r.tvl_usd, a) - dist(r.tvl_usd, b));
+    const cross = livePos.filter((p) => p.category !== r.category).sort((a, b) => dist(r.tvl_usd, a) - dist(r.tvl_usd, b));
+    const want = [...same.slice(0, 3)];
+    let i = 0;
+    while (want.length < 3) want.push(cross[i++]);
+    if (r.comps_same_category !== Math.min(3, same.length)) problems.push(`${r.slug}: comps_same_category ${r.comps_same_category} vs recomputed ${Math.min(3, same.length)}`);
+    if (r.comps_same_category < 3) fallbackRows++;
+    want.forEach((p, j) => {
+      const c = r.comps[j];
+      const mult = Math.round((p.mcap_usd / p.tvl_usd) * 1e6) / 1e6;
+      if (!c || c.slug !== p.slug || c.name !== p.name || c.tvl_usd !== p.tvl_usd
+        || Math.abs(c.multiple - mult) > 1e-9 || c.same_category !== (p.category === r.category)) {
+        problems.push(`${r.slug}: comp ${j} ${c?.slug} vs recomputed ${p.slug} (mult ${c?.multiple} vs ${mult})`);
+      }
+    });
+    if (problems.length > 5) break;
+  }
+  const r1 = rows[0];
+  const r99 = rows[98];
+  const r198 = rows[197];
+  const sym = rows.find((r) => r.slug === 'symbiotic');
+  const spotOk = JSON.stringify(r1.comps.map((c) => c.slug)) === JSON.stringify(['api3', 'babylon-protocol', 'polygon-bridge'])
+    && JSON.stringify(r99.comps.map((c) => c.slug)) === JSON.stringify(['veranta', 'gains-network', 'ekubo'])
+    && JSON.stringify(r198.comps.map((c) => c.slug)) === JSON.stringify(['harmonix-finance', 'looped-hype', 'aura'])
+    && sym && sym.comps_same_category === 0
+    && JSON.stringify(sym.comps.map((c) => c.slug)) === JSON.stringify(['xdai-stake-bridge', 'starknet-bridge', 'solstice']);
+  if (!spotOk) problems.push('spot-check ranks 1/99/198 + symbiotic mismatch');
+  if (fallbackRows !== 102) problems.push(`fallback rows ${fallbackRows}, expect 102`);
+  record('V24 comps recompute', problems.length === 0,
+    `all 198 rows × 3 comps recomputed from the 128 live positive-mcap tokens (|ln TVL ratio|, same-category first); fallback rows ${fallbackRows}/198 (expect 102); spot rank 1 ${r1.comps.map((c) => c.slug).join(',')}, rank 99 ${r99.comps.map((c) => c.slug).join(',')}, rank 198 ${r198.comps.map((c) => c.slug).join(',')}, symbiotic ${sym?.comps.map((c) => c.slug).join(',')} (0 same-category); problems: ${problems.slice(0, 5).join(' | ') || 'none'}`);
+}
+
+// ---------------------------------------------------------------- V25 (radar-4 dashboard DOM)
+const V25_PY = `
+import json, sys
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+out = Path(sys.argv[1])
+res = {}
+with sync_playwright() as p:
+    b = p.chromium.launch(headless=True)
+    pg = b.new_page(viewport={'width': 1440, 'height': 900})
+    pg.goto((out / 'dashboard' / 'index.html').as_uri())
+    pg.wait_for_selector('#rows tr')
+    pg.wait_for_selector('#kpiStrip div')
+    kpi = {}
+    for div in pg.locator('#kpiStrip div').all():
+        kpi[div.locator('dt').inner_text()] = div.locator('dd').inner_text()
+    res['kpi_wf'] = kpi.get('Walk-forward median |ln err|')
+    method = pg.locator('#methodFit').inner_text()
+    res['method_wf'] = 'Walk-forward validation' in method
+    res['method_ablation'] = 'Ablation' in method and 'category effects' in method
+    res['method_keep'] = 'every term is kept' in method
+    first_interval = pg.locator('#rows tr').first.locator('td:nth-child(10)').inner_text()
+    res['board_interval_r1'] = first_interval
+    pg.goto((out / 'dashboard' / 'index.html').as_uri() + '#p=steakhouse-financial')
+    pg.wait_for_selector('#detail[open]')
+    dlg = pg.locator('#detail').inner_text()
+    res['detail_anchored'] = 'Anchored by' in dlg
+    res['detail_api3'] = 'Api3' in dlg  # comp name as rendered (slug api3)
+    res['detail_stable'] = 'stable in 198/200 refits' in dlg
+    res['detail_no_identical'] = '$184.5M\\u2013$184.5M' not in dlg
+    b.close()
+print(json.dumps(res))
+`;
+{
+  const pyFile = join(scratch, 'v25.py');
+  writeFileSync(pyFile, V25_PY);
+  const r = spawnSync('python3', [pyFile, OUT], { encoding: 'utf8', timeout: 120_000 });
+  if (r.status !== 0) {
+    fail('V25 radar-4 dashboard DOM', `playwright script exit ${r.status}: ${(r.stderr || '').trim().split('\n').slice(-3).join(' | ') || r.stdout}`);
+  } else {
+    let v25;
+    try { v25 = JSON.parse(r.stdout.trim().split('\n').pop()); } catch { v25 = null; }
+    if (!v25) fail('V25 radar-4 dashboard DOM', 'playwright output was not JSON: ' + r.stdout.slice(0, 200));
+    else {
+      const problems = [];
+      if (!String(v25.kpi_wf || '').startsWith('1.25')) problems.push(`KPI walk-forward "${v25.kpi_wf}", expect 1.25… (n=95, 2 folds)`);
+      if (!v25.method_wf) problems.push('methodology lacks the walk-forward paragraph');
+      if (!v25.method_ablation) problems.push('methodology lacks the ablation table');
+      if (!v25.method_keep) problems.push('methodology lacks the keep verdict');
+      if (!String(v25.board_interval_r1 || '').includes('stable in 198/200 refits')) problems.push(`board rank-1 interval cell "${v25.board_interval_r1}", expect "stable in 198/200 refits"`);
+      if (!v25.detail_anchored) problems.push('detail dialog lacks "Anchored by"');
+      if (!v25.detail_api3) problems.push('detail dialog lacks comp api3');
+      if (!v25.detail_stable) problems.push('detail dialog lacks "stable in 198/200 refits"');
+      if (!v25.detail_no_identical) problems.push('detail dialog still shows the identical $184.5M–$184.5M interval');
+      record('V25 radar-4 dashboard DOM', problems.length === 0,
+        `KPI walk-forward "${v25.kpi_wf}"; methodology WF ${v25.method_wf}, ablation ${v25.method_ablation}, keep ${v25.method_keep}; board rank-1 interval "${v25.board_interval_r1}"; detail anchored ${v25.detail_anchored}, api3 ${v25.detail_api3}, stable ${v25.detail_stable}, no identical interval ${v25.detail_no_identical}; problems: ${problems.join(' | ') || 'none'}`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------- S1 (info): radar-3 constants recompute
