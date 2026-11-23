@@ -1,14 +1,11 @@
-// Token Radar dashboard (radar-7). Renders window.RADAR (data.js) — board,
-// filters, detail, live section, KPI/integrity, ledger, methodology,
-// sandbox. No network, no fetch, no framework. All numbers come from DATA.
+// Token Radar dashboard (radar-7): renders window.RADAR. No network; all numbers come from DATA.
 (function () {
   'use strict';
 
   var DATA = window.RADAR;
   if (!DATA) return;
 
-  // Distinct values actually present on the board; a hash may name a value
-  // outside these sets (e.g. #category=CEX — CEX is live-only, never board).
+  // Values actually present on the board (a hash may name others).
   var boardCats = {}, boardChains = {};
 
   var state = {
@@ -40,8 +37,7 @@
   function fmtRange(lo, hi) {
     return fmtUsd(lo) + '–' + fmtUsd(hi);
   }
-  // Collapsed bootstrap intervals (P10 = P90) are shown as the measured
-  // refit count, never as two identical bounds (radar-4 T4).
+  // Collapsed intervals show the refit count, never two equal bounds.
   function fmtInterval(r) {
     if (r.stable_refits !== null && r.stable_refits !== undefined) {
       return 'stable in ' + r.stable_refits + '/' + DATA.assumptions.bootstrap_b + ' refits';
@@ -91,6 +87,8 @@
     state.watchOnly = params.get('watch') === '1';
     state.minTvl = parseFloat(params.get('min')) || 0;
     state.selected = params.get('p');
+    // T4: the FARM view sorts by $/hour, not rank.
+    if (state.verdict === 'FARM') { state.sort = 'dph'; state.dir = -1; }
   }
   function writeHash() {
     var params = new URLSearchParams();
@@ -134,6 +132,7 @@
       else if (key === 'ev') { av = a.value_if_launches_usd; bv = b.value_if_launches_usd; }
       else if (key === 'interval') { av = a.p90_usd; bv = b.p90_usd; }
       else if (key === 'rankrange') { av = a.rank_hi - a.rank_lo; bv = b.rank_hi - b.rank_lo; }
+      else if (key === 'dph') { av = a.dollars_per_hour; bv = b.dollars_per_hour; }
       else if (key === 'verdict') { av = VERDICT_ORDER[a.verdict]; bv = VERDICT_ORDER[b.verdict]; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -dir;
@@ -151,9 +150,7 @@
     });
   }
 
-  // Keep a select in sync even when the requested value is not a board
-  // value: show the requested value as a clearly-marked option instead of
-  // leaving the select on some other category (or on nothing at all).
+  // Keep a select in sync even for a value not on the board (marked).
   function syncSelectWithUnknown(select, value, known) {
     var prev = select.querySelector('option[data-unknown]');
     if (prev) prev.remove();
@@ -192,11 +189,17 @@
     q.addEventListener('input', function () { state.q = q.value; writeHash(); renderRows(); });
     cat.addEventListener('change', function () { state.category = cat.value; writeHash(); renderRows(); });
     ch.addEventListener('change', function () { state.chain = ch.value; writeHash(); renderRows(); });
-    verdict.addEventListener('change', function () { state.verdict = verdict.value; writeHash(); renderRows(); });
+    verdict.addEventListener('change', function () {
+      state.verdict = verdict.value;
+      if (state.verdict === 'FARM') { state.sort = 'dph'; state.dir = -1; }
+      else if (state.sort === 'dph') { state.sort = 'rank'; state.dir = 1; }
+      writeHash(); renderRows();
+    });
     min.addEventListener('input', function () { state.minTvl = parseFloat(min.value) || 0; writeHash(); renderRows(); });
     watch.addEventListener('change', function () { state.watchOnly = watch.checked; writeHash(); renderRows(); });
     document.getElementById('clear').addEventListener('click', function () {
       state.q = ''; state.category = 'all'; state.chain = 'all'; state.verdict = 'all'; state.watchOnly = false; state.minTvl = 0;
+      state.sort = 'rank'; state.dir = 1;
       syncControls();
       writeHash(); renderRows();
     });
@@ -243,6 +246,7 @@
         el('td', { class: 'num', text: fmtUsd(r.value_if_launches_usd) }),
         el('td', { class: 'num interval', text: fmtInterval(r) }),
         el('td', { class: 'num', text: r.rank_lo + '–' + r.rank_hi }),
+        el('td', { class: 'num', text: '$' + r.dollars_per_hour }),
         el('td', null, el('span', { class: 'verdict v-' + r.verdict.toLowerCase(), text: r.verdict }))
       );
       tbody.appendChild(tr);

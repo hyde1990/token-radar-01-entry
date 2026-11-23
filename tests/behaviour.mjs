@@ -143,6 +143,12 @@ check('worked example (fitted, quoted constants) $16,395,497', Math.abs(worked -
 
 const dashBytes = readdirSync(join(OUT, 'dashboard')).reduce((n, f) => n + statSync(join(OUT, 'dashboard', f)).size, 0);
 check('dashboard source <= 65,000 B (target; hard cap 65,536 B)', dashBytes <= 65000, `${dashBytes} B`);
+check('dashboard has $/h column + FARM auto-sort to $/h (fix1 F-A)', (() => {
+  const html = readFileSync(join(OUT, 'dashboard', 'index.html'), 'utf8');
+  const js = readFileSync(join(OUT, 'dashboard', 'app.js'), 'utf8');
+  return html.includes('data-sort="dph"') && js.includes("key === 'dph'")
+    && js.includes("state.verdict === 'FARM'") && js.includes("text: '$' + r.dollars_per_hour");
+})());
 const dossier = readFileSync(join(OUT, 'dossier.json'));
 check('dossier <= 1.5 MiB', dossier.length <= 1_572_864, `${dossier.length} B`);
 const shots = readdirSync(join(OUT, 'screenshots'));

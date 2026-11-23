@@ -1036,6 +1036,15 @@ with sync_playwright() as p:
     pg.wait_for_function("document.querySelectorAll('#rows tr').length === 25")
     verdicts = pg.locator('#rows tr .verdict').all_inner_texts()
     res['verdict_filter'] = {'rows': pg.locator('#rows tr').count(), 'count_text': pg.locator('#count').inner_text(), 'all_farm': all(v == 'FARM' for v in verdicts), 'n_spans': len(verdicts)}
+    # fix1 F-A: the FARM view must be sorted by net/hour high->low, and the
+    # $/h column (12th td) must carry those values in DOM order.
+    dph = [float(t.replace('$', '').replace(',', '')) for t in pg.locator('#rows tr td:nth-child(12)').all_inner_texts()]
+    res['verdict_filter']['dph'] = dph
+    res['verdict_filter']['dph_desc'] = all(dph[i] > dph[i+1] for i in range(len(dph) - 1))
+    res['verdict_filter']['first_name'] = pg.locator('#rows tr').first.locator('.name b').inner_text()
+    # fix1 F-B: the board table must fit its wrap at 1440px with the Verdict
+    # column (last th) inside the viewport — no horizontal scroll needed.
+    res['table_fit'] = pg.evaluate("() => { const t = document.querySelector('#board'); const w = t.closest('.table-wrap'); const ths = [...document.querySelectorAll('#board thead th')]; const last = ths[ths.length - 1].getBoundingClientRect(); return { scroll: t.scrollWidth, wrap: w.clientWidth, verdict_right: Math.round(last.right), viewport: window.innerWidth }; }")
     b.close()
 print(json.dumps(res))
 `;
@@ -1070,8 +1079,14 @@ print(json.dumps(res))
       if (vf.rows !== 25) problems.push(`verdict filter FARM: ${vf.rows} rows, expect 25`);
       if (!String(vf.count_text || '').includes('25')) problems.push(`verdict filter count "${vf.count_text}"`);
       if (!vf.all_farm) problems.push(`verdict filter: not all visible rows are FARM (${vf.n_spans} verdict spans)`);
+      if (!vf.dph_desc) problems.push(`verdict filter FARM: $/h not descending (${(vf.dph || []).slice(0, 6).join(', ')}…)`);
+      if (!vf.dph || Math.abs(vf.dph[0] - 1887.62) > 0.005) problems.push(`verdict filter FARM: first $/h ${vf.dph && vf.dph[0]}, expect 1887.62 (USDD)`);
+      if (vf.first_name !== 'USDD') problems.push(`verdict filter FARM: first row "${vf.first_name}", expect USDD (highest $/h)`);
+      const tf = v20.table_fit || {};
+      if (!(tf.scroll <= tf.wrap)) problems.push(`board table overflows wrap: scrollWidth ${tf.scroll} > wrap clientWidth ${tf.wrap}`);
+      if (!(tf.verdict_right <= 1440)) problems.push(`Verdict column right edge ${tf.verdict_right}px beyond the 1440px viewport`);
       record('V20 KPI / sandbox DOM', problems.length === 0,
-        `KPI Snapshot total ${k['Snapshot total']}, Ranked "${k.Ranked}", Median odds ${k['Median odds']}, Verdicts "${k.Verdicts}"; integrity ${JSON.stringify(v20.integrity)}; sandbox top-10 first "${(sb.top_before || '').slice(0, 60)}" → "${(sb.top_after || '').slice(0, 60)}", stats moved on slope ${sb.stats_after !== sb.stats_before} and on allocation ${sb.stats_alloc !== sb.stats_after}, locked board first row unchanged ${sb.board_first_after_slope === sb.board_first_before && sb.board_first_after_alloc === sb.board_first_before}; verdict filter FARM ${vf.rows} rows, count "${vf.count_text}", all FARM ${vf.all_farm}; problems: ${problems.join(' | ') || 'none'}`);
+        `KPI Snapshot total ${k['Snapshot total']}, Ranked "${k.Ranked}", Median odds ${k['Median odds']}, Verdicts "${k.Verdicts}"; integrity ${JSON.stringify(v20.integrity)}; sandbox top-10 first "${(sb.top_before || '').slice(0, 60)}" → "${(sb.top_after || '').slice(0, 60)}", stats moved on slope ${sb.stats_after !== sb.stats_before} and on allocation ${sb.stats_alloc !== sb.stats_after}, locked board first row unchanged ${sb.board_first_after_slope === sb.board_first_before && sb.board_first_after_alloc === sb.board_first_before}; verdict filter FARM ${vf.rows} rows, count "${vf.count_text}", all FARM ${vf.all_farm}, $/h ${(vf.dph || [])[0]} → ${(vf.dph || []).slice(-1)[0]} descending ${vf.dph_desc}, first ${vf.first_name}; table scrollWidth ${tf.scroll} / wrap ${tf.wrap}, Verdict right ${tf.verdict_right}px (viewport ${tf.viewport}); problems: ${problems.join(' | ') || 'none'}`);
     }
   }
 }
