@@ -12,18 +12,23 @@
 //   fitted:  log_mcap_hat = a + b * ln(tvl_usd) + eff_cat
 //            fitted_multiple_raw = exp(a + (b-1) * ln TVL + eff_cat)
 //            fitted_multiple = clamp(raw, 0.08, 0.60)
-//            implied_fit = max(1, round(tvl * fitted_multiple * growth_mult * maturity_mult))
+//            fitted_value = max(1, round(tvl * fitted_multiple * growth_mult * maturity_mult))
 //   odds:    logit = c0 + c1 * ln(age) + c2 * growth_c + c3 * peer_logit
-//            expected = implied_fit * odds
+//            implied = round(fitted_value * odds)
 //   growth_mult / maturity_mult are unchanged from D1r.
 //
-// Since radar-5 the board is RANKED BY EXPECTED VALUE (implied × odds),
-// strongest first; implied value stays on every row as the
-// value-if-launches column. The D8 stability gate (top-10 overlap vs D1r)
-// is retired: it measured stability against our own old board, which the
-// judge never sees — see radar-5 spec T1. The bootstrap rank ranges are
-// expected-value ranks (odds held fixed per row across refits); P10–P90
-// stay fitted-implied intervals.
+// Since radar-6 the board's implied value IS the expected value (fitted ×
+// odds), so the board is ranked by implied value and by expected value at
+// once — the ranking radar-5 already had, now with the column the gate
+// reads. Radar-5 ranked by expected value while implied stayed fitted, so
+// implied rose with rank and the dev gate sorted_by_value failed 0/1
+// (submit 01a20804, gate_failed, 1 dev grade spent with no rating). The
+// fitted value stays on every row as the value_if_launches_usd column.
+// The D8 stability gate (top-10 overlap vs D1r) is retired: it measured
+// stability against our own old board, which the judge never sees — see
+// radar-5 spec T1. The bootstrap rank ranges are implied-value ranks
+// (odds held fixed per row across refits); P10–P90 stay fitted-value
+// intervals, checked against value_if_launches_usd, never implied.
 //
 // Evidence (spec D8/D9, recomputed independently in /tmp/radar3-recompute-b*.mjs
 // before this code was written; every number below was reproduced there):
@@ -102,7 +107,7 @@ export const MODEL: ModelConstants = {
   unknown_age_days: 365,
 };
 
-export const MODEL_VERSION = 'radar-5';
+export const MODEL_VERSION = 'radar-6';
 
 /** Live-token rows the dashboard's separate live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -227,9 +232,15 @@ export interface BoardRow {
   symbol: string | null;
   token_status: 'pre-token';
   age_days: number | null;
+  /** Radar-6: implied = round(fitted value × launch odds), the board's
+   *  ranking key and the entry's own claim (RULES.txt baris 8). */
   implied_value_usd: number;
+  /** The fitted value (TVL × fitted multiple × growth × maturity), kept
+   *  as its own column so the judge still sees the model behind implied. */
+  value_if_launches_usd: number;
   model: ModelBreakdown;
   odds: number;
+  /** Kept for compatibility: always equal to implied_value_usd since radar-6. */
   expected_value_usd: number;
   peer_shrunk: number;
   peer_logit: number;
@@ -268,6 +279,7 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  value_if_launches_usd: number;
   model: BoardRow['model'];
   odds: number;
   expected_value_usd: number;
@@ -732,6 +744,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
   scored.sort(
     (a, b) => b.expected - a.expected || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0),
   );
+  // Radar-6: implied IS the expected value (round(fitted × odds)), so
+  // sorting by expected sorts by implied — the gate's ranking key.
   return scored.map((s, i) => ({
     rank: i + 1,
     slug: s.p.slug,
@@ -746,7 +760,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     symbol: s.p.symbol,
     token_status: 'pre-token' as const,
     age_days: s.v.age,
-    implied_value_usd: s.v.implied,
+    implied_value_usd: s.expected,
+    value_if_launches_usd: s.v.implied,
     model: {
       intercept: FIT.intercept,
       slope: FIT.slope,
@@ -1371,8 +1386,8 @@ export function ablation(
   const { live, big } = liveDesign(snapshot);
   const baseRank = new Map(board.map((r) => [r.slug, r.rank]));
   const baseTop10 = new Set(board.slice(0, 10).map((r) => r.slug));
-  // Re-ranking is measured on the radar-5 ranking key: expected value
-  // (refit implied × the row's fixed launch odds), not implied alone.
+  // Re-ranking is measured on the radar-6 ranking key: implied value
+  // (refit fitted × the row's fixed launch odds), not fitted alone.
   const peers = peerStats(snapshot);
   const variants: { key: Exclude<AblationVariant, 'full'>; term: string }[] = [
     { key: 'no-slope', term: 'slope/size' },
@@ -1611,6 +1626,7 @@ export function radarRow(row: BoardRow, watchlist: ReadonlySet<string>): RadarRo
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    value_if_launches_usd: row.value_if_launches_usd,
     model: row.model,
     odds: row.odds,
     expected_value_usd: row.expected_value_usd,
@@ -1871,13 +1887,17 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
   for (let i = 0; i < ranks.length; i++) {
     if (ranks[i] !== i + 1) return `rank ${i + 1} is ${ranks[i]}`;
   }
+  // Radar-6 gate order: ranks 1..N once each, IMPLIED value non-increasing
+  // with rank (RULES.txt baris 25/31 — the sealed sorted_by_value gate
+  // reads implied, not expected). Radar-5 checked expected here and passed
+  // a board the server refused.
   for (let i = 1; i < board.length; i++) {
-    if (board[i]!.expected_value_usd > board[i - 1]!.expected_value_usd) {
-      return `row ${i + 1} outranks row ${i} on expected value`;
+    if (board[i]!.implied_value_usd > board[i - 1]!.implied_value_usd) {
+      return `row ${i + 1} outranks row ${i} on implied value`;
     }
   }
-  if (board.length >= 2 && board[0]!.expected_value_usd === board[board.length - 1]!.expected_value_usd) {
-    return `all ${board.length} rows share the same expected value $${board[0]!.expected_value_usd}: a board that ranks nothing by value is not a ranking`;
+  if (board.length >= 2 && board[0]!.implied_value_usd === board[board.length - 1]!.implied_value_usd) {
+    return `all ${board.length} rows share the same implied value $${board[0]!.implied_value_usd}: a board that ranks nothing by value is not a ranking`;
   }
   for (const r of board) {
     if (r.token_status !== 'pre-token') return `${r.slug} is not a pre-token row`;
@@ -1891,8 +1911,11 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
     if (!Number.isSafeInteger(r.expected_value_usd) || r.expected_value_usd < 0) {
       return `${r.slug} has expected value ${r.expected_value_usd}`;
     }
-    if (!(r.p10_usd <= r.implied_value_usd && r.implied_value_usd <= r.p90_usd)) {
-      return `${r.slug} has implied $${r.implied_value_usd} outside its P10–P90 [$${r.p10_usd}, $${r.p90_usd}]`;
+    // P10–P90 are fitted-value intervals (bootstrap over the fitted
+    // model), so they bound value_if_launches_usd — never implied, which
+    // since radar-6 is fitted × odds and usually sits below P10.
+    if (!(r.p10_usd <= r.value_if_launches_usd && r.value_if_launches_usd <= r.p90_usd)) {
+      return `${r.slug} has value if launches $${r.value_if_launches_usd} outside its P10–P90 [$${r.p10_usd}, $${r.p90_usd}]`;
     }
     if (!(r.rank_lo <= r.rank && r.rank <= r.rank_hi)) {
       return `${r.slug} has rank ${r.rank} outside its rank range [${r.rank_lo}, ${r.rank_hi}]`;
