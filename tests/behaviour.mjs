@@ -1,14 +1,14 @@
-// Behaviour tests for the token-radar-01 entry (radar-3), at the program seam:
+// Behaviour tests for the token-radar-01 entry (radar-7), at the program seam:
 // run main.ts against the sealed snapshot and check the gate-shaped properties
 // of the whole output tree. stdlib only. Run: node tests/behaviour.mjs
 //
-// Radar-3 notes (spec D8–D14):
-// - The fitted model is hardcoded to the D8 quoted constants (intercept
-//   8.028969, slope 0.463147, 9 category effects). The spec's worked example
-//   $18,673,844 was computed from the same stated inputs with FULL-PRECISION
-//   betas; the quoted constants give $18,673,967 for those inputs (+$123,
-//   0.00066%). The check below asserts the quoted-constant value exactly
-//   and the $123 gap is recorded in BUILD.md, not hidden.
+// Radar-7 notes:
+// - The fitted model is slope-only (intercept 6.964567, slope 0.522266, no
+//   category effects): the additive ablation kept the size curve and dropped
+//   every other candidate. The spec's worked example (TVL $152.8M, RWA,
+//   growth -3.29%, age 512d) under the quoted constants gives $16,395,497
+//   (the radar-6 value $18,673,967 came from the 9-dummy fit; the RWA
+//   effect is 0 now, so no category term enters).
 // - The D1r median model survives only as the labelled d1r_multiple fallback
 //   (Yield 0.191, Risk Curators 0.214); no row may carry base_multiple.
 import { execFileSync } from 'node:child_process';
@@ -70,8 +70,8 @@ check('fitted model breakdown present on every row', rows.every((r) =>
   && typeof r.model.fitted_multiple === 'number' && typeof r.model.fitted_multiple_raw === 'number'
   && typeof r.model.d1r_multiple === 'number' && typeof r.model.growth_multiplier === 'number'
   && typeof r.model.maturity_multiplier === 'number' && typeof r.model.at_clamp_bound === 'boolean'));
-check('fitted constants used on every row (intercept 8.028969, slope 0.463147)', rows.every((r) =>
-  r.model.intercept === 8.028969 && r.model.slope === 0.463147));
+check('fitted constants used on every row (intercept 6.964567, slope 0.522266)', rows.every((r) =>
+  r.model.intercept === 6.964567 && r.model.slope === 0.522266));
 check('D1r multiple only as the labelled fallback (no base_multiple)', (() => {
   const y = rows.find((r) => r.category === 'Yield');
   const f = rows.find((r) => r.category === 'Risk Curators');
@@ -83,7 +83,7 @@ check('no live-token slug in board', rows.every((r) => r.mcap_usd === null && r.
 const NEW_FIELDS = ['odds', 'expected_value_usd', 'value_if_launches_usd', 'peer_shrunk', 'peer_logit', 'p10_usd', 'p90_usd',
   'rank_lo', 'rank_hi', 'capital_tier', 'hold_days', 'gas_total_usd', 'opportunity_cost_usd',
   'farm_cost_usd', 'break_even_share', 'hours_active', 'net_1bp_usd', 'dollars_per_hour', 'verdict'];
-check('radar-6 row fields present (odds/EV/fitted/bootstrap/netting/verdict)', rows.every((r) =>
+check('radar-7 row fields present (odds/EV/fitted/bootstrap/netting/verdict)', rows.every((r) =>
   NEW_FIELDS.every((f) => typeof r[f] === 'number' || (f === 'verdict' && typeof r[f] === 'string'))),
   rows.find((r) => !NEW_FIELDS.every((f) => typeof r[f] === 'number' || (f === 'verdict' && typeof r[f] === 'string')))?.slug ?? '');
 // P10–P90 are fitted-value intervals (bootstrap over the fitted model):
@@ -95,10 +95,10 @@ check('rank_lo <= rank <= rank_hi on every row', rows.every((r) => r.rank_lo <= 
 check('odds in (0,1) and implied = round(value if launches x odds) = expected', rows.every((r) =>
   r.odds > 0 && r.odds < 1 && Math.round(r.value_if_launches_usd * r.odds) === r.implied_value_usd && r.implied_value_usd === r.expected_value_usd),
   rows.find((r) => !(r.odds > 0 && r.odds < 1 && Math.round(r.value_if_launches_usd * r.odds) === r.implied_value_usd && r.implied_value_usd === r.expected_value_usd))?.slug ?? '');
-check('verdict counts FARM 104 / THIN 80 / SKIP 14', (() => {
+check('verdict counts FARM 25 / THIN 138 / SKIP 35 (radar-7 T4: labour charged)', (() => {
   const c = { FARM: 0, THIN: 0, SKIP: 0 };
   for (const r of rows) c[r.verdict] = (c[r.verdict] ?? 0) + 1;
-  return c.FARM === 104 && c.THIN === 80 && c.SKIP === 14;
+  return c.FARM === 25 && c.THIN === 138 && c.SKIP === 35;
 })(), (() => {
   const c = { FARM: 0, THIN: 0, SKIP: 0 };
   for (const r of rows) c[r.verdict] = (c[r.verdict] ?? 0) + 1;
@@ -107,22 +107,21 @@ check('verdict counts FARM 104 / THIN 80 / SKIP 14', (() => {
 
 // Worked example from the spec (D8): the composite median watchlist protocol
 // (TVL $152.8M, RWA, growth -3.29%, age 512d) under the fitted model with the
-// QUOTED constants. The spec prints $18,673,844, which is the same inputs
-// with full-precision betas; the quoted constants give $18,673,967 (+$123).
-const rawWorked = Math.exp(8.028969 + (0.463147 - 1) * Math.log(152_800_000) + 0.179798);
+// QUOTED constants (radar-7: no category effect, so no RWA term enters).
+const rawWorked = Math.exp(6.964567 + (0.522266 - 1) * Math.log(152_800_000));
 const multWorked = Math.min(0.6, Math.max(0.08, rawWorked));
 const worked = Math.round(152_800_000 * multWorked * (1 + 0.6 * (-3.29 / 100)) * (0.7 + 0.3 * (512 / 1095)));
-check('worked example (fitted, quoted constants) $18,673,967', Math.abs(worked - 18_673_967) <= 1, `$${worked.toLocaleString()} (spec prints $18,673,844 from full-precision betas; +$123)`);
+check('worked example (fitted, quoted constants) $16,395,497', Math.abs(worked - 16_395_497) <= 1, `$${worked.toLocaleString()} (radar-6 gave $18,673,967 from the 9-dummy fit)`);
 
-// Implied ranking (radar-6 T1; the D8 stability gate is retired — the judge never
-// sees our old board): rank-1 BitFi Basis $35,830,169 implied, implied top-10 + total
-// match the independent local computation (ev-ranking-impact-2026-11-23.md),
-// overlap fitted-vs-implied top-10 6/10, max displacement 143 (Nonce Capital
-// fitted #10 -> implied #153), Spearman fitted-vs-implied 0.6536.
+// Implied ranking (radar-7 T1; the D8 stability gate is retired — the judge never
+// sees our old board): rank-1 USDD $35,364,990 implied, implied top-10 + total
+// match the independent local computation, overlap fitted-vs-implied top-10
+// 6/10, max displacement 148 (Nonce Capital fitted #8 -> implied #156),
+// Spearman fitted-vs-implied 0.6560.
 {
   const evTop10 = rows.slice(0, 10).map((r) => r.slug);
-  const wantTop10 = ['bitfi-basis', 'usdd', 'veda', 'steakhouse-financial', 'polymarket-international',
-    'sentora-curator', 'cian-yield-layer', 'opentrade', 'plume-vaults', 'tori-finance'];
+  const wantTop10 = ['usdd', 'veda', 'steakhouse-financial', 'polymarket-international',
+    'cian-yield-layer', 'figure-markets-prime', 'sentora-curator', 'bitfi-basis', 'b14g', 'bittensor-dtao'];
   const fitOrder = [...rows].sort((a, b) => b.value_if_launches_usd - a.value_if_launches_usd || (a.slug < b.slug ? -1 : 1));
   const fitRank = new Map(fitOrder.map((r, i) => [r.slug, i + 1]));
   const fitTop10 = fitOrder.slice(0, 10).map((r) => r.slug);
@@ -132,13 +131,13 @@ check('worked example (fitted, quoted constants) $18,673,967', Math.abs(worked -
   const n = rows.length;
   const d2 = rows.reduce((s, r) => s + (fitRank.get(r.slug) - r.rank) ** 2, 0);
   const spearman = 1 - (6 * d2) / (n * (n * n - 1));
-  check('implied rank-1 BitFi Basis $35,830,169', rows[0].slug === 'bitfi-basis' && rows[0].implied_value_usd === 35830169,
+  check('implied rank-1 USDD $35,364,990', rows[0].slug === 'usdd' && rows[0].implied_value_usd === 35364990,
     `rank 1 ${rows[0].slug} $${rows[0].implied_value_usd.toLocaleString()}`);
-  check('implied top-10 exact (BitFi, USDD, Veda, Steakhouse, Polymarket, Sentora, Cian, OpenTrade, Plume, Tori)',
+  check('implied top-10 exact (USDD, Veda, Steakhouse, Polymarket, Cian, Figure, Sentora, BitFi, B14G, Bittensor)',
     JSON.stringify(evTop10) === JSON.stringify(wantTop10), evTop10.join(', '));
-  check('total implied $785,907,488', totalEv === 785907488, `$${totalEv.toLocaleString()}`);
-  check('implied vs fitted: overlap 6/10, max displacement 143 (Nonce #10 -> #153), Spearman 0.6536',
-    overlap === 6 && nonceDisp === 143 && Math.abs(spearman - 0.6536) < 0.0005,
+  check('total implied $777,976,039', totalEv === 777976039, `$${totalEv.toLocaleString()}`);
+  check('implied vs fitted: overlap 6/10, max displacement 148 (Nonce #8 -> #156), Spearman 0.6560',
+    overlap === 6 && nonceDisp === 148 && Math.abs(spearman - 0.6560) < 0.0005,
     `overlap ${overlap}/10, Nonce displacement ${nonceDisp}, Spearman ${spearman.toFixed(4)}`);
 }
 
@@ -159,7 +158,7 @@ check('data.js agrees with board.json', (() => {
   const d = JSON.parse(m[1]);
   return d.rows.length === rows.length && d.rows.every((r, i) => r.slug === rows[i].slug && r.implied_value_usd === rows[i].implied_value_usd && r.value_if_launches_usd === rows[i].value_if_launches_usd)
     && d.live.length === 24 && d.live.every((r) => r.mcap_usd > 0)
-    && d.model_version === 'radar-6' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
+    && d.model_version === 'radar-7' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
     && d.integrity.length === 5 && d.integrity.every((c) => c.pass === true);
 })());
 
@@ -179,37 +178,45 @@ const DATA = (() => {
   check('T1 walk-forward n=95 (33 null listed_at excluded, no imputation)',
     wf && wf.n === 95 && wf.n_null_excluded === 33,
     wf ? `n=${wf.n}, excluded=${wf.n_null_excluded}` : 'walk_forward missing');
-  check('T1 fold 66/29 median 1.2004 coverage 79.3%',
+  check('T1 fold 66/29 median 1.1824 coverage 79.3%',
     wf && wf.folds?.[0]?.train === 66 && wf.folds[0].test === 29
-    && approx(wf.folds[0].median, 1.2004) && Math.abs(wf.folds[0].coverage - 23 / 29) < 0.001,
+    && approx(wf.folds[0].median, 1.1824) && Math.abs(wf.folds[0].coverage - 23 / 29) < 0.001,
     wf?.folds?.[0] ? `median ${wf.folds[0].median?.toFixed(4)}, cov ${(wf.folds[0].coverage * 100).toFixed(1)}%` : 'fold 0 missing');
-  check('T1 fold 80/15 median 2.2077 coverage 73.3%',
+  check('T1 fold 80/15 median 1.2451 coverage 66.7%',
     wf && wf.folds?.[1]?.train === 80 && wf.folds[1].test === 15
-    && approx(wf.folds[1].median, 2.2077) && Math.abs(wf.folds[1].coverage - 11 / 15) < 0.001,
+    && approx(wf.folds[1].median, 1.2451) && Math.abs(wf.folds[1].coverage - 10 / 15) < 0.001,
     wf?.folds?.[1] ? `median ${wf.folds[1].median?.toFixed(4)}, cov ${(wf.folds[1].coverage * 100).toFixed(1)}%` : 'fold 1 missing');
-  check('T1 pooled median 1.2509 coverage 77.3% (44 predictions, 15 newest in both folds)',
-    wf && approx(wf.pooled_median, 1.2509) && Math.abs(wf.pooled_coverage - 34 / 44) < 0.001
-    && approx(wf.loo_implied_median, 1.2490),
+  check('T1 pooled median 1.2126 coverage 75.0% (44 predictions, 15 newest in both folds)',
+    wf && approx(wf.pooled_median, 1.2126) && Math.abs(wf.pooled_coverage - 33 / 44) < 0.001
+    && approx(wf.loo_implied_median, 1.2434),
     wf ? `pooled ${wf.pooled_median?.toFixed(4)}, cov ${(wf.pooled_coverage * 100).toFixed(1)}%, LOO-implied ${wf.loo_implied_median?.toFixed(4)}` : 'walk_forward missing');
 }
 {
   const ab = DATA?.fit?.ablation;
   const want = {
-    'slope/size': { loo: 1.2006, wf: 1.3403 },
-    growth: { loo: 1.3106, wf: 1.3183 },
-    maturity: { loo: 1.2387, wf: 1.3542 },
-    'category effects': { loo: 1.2434, wf: 1.2126 },
+    'flat-median baseline': { loo: 1.6676, wf: 1.5151, decision: 'keep' },
+    'size curve ln TVL': { loo: 1.2434, wf: 1.2126, decision: 'keep' },
+    'category ridge (λ=10)': { loo: 1.2768, wf: 1.2255, decision: 'drop' },
+    'family ridge (λ=10)': { loo: 1.2532, wf: 1.1824, decision: 'drop' },
+    '7-day growth (fitted)': { loo: 1.3714, wf: 1.4845, decision: 'drop' },
+    'age ln (fitted)': { loo: 1.2382, wf: 1.6268, decision: 'drop' },
+    'chain count ln(min(n,10))': { loo: 1.2559, wf: 1.3580, decision: 'drop' },
   };
   const approx = (a, b) => typeof a === 'number' && Math.abs(a - b) <= 0.0005;
-  check('T2 ablation: 4 terms, all KEEP, LOO/WF match independent recompute',
-    Array.isArray(ab) && ab.length === 4 && ab.every((r) =>
-      want[r.term] && approx(r.loo_without, want[r.term].loo)
-      && approx(r.wf_pooled_without, want[r.term].wf) && r.decision === 'keep'),
-    ab ? ab.map((r) => `${r.term} LOO ${r.loo_without?.toFixed(4)} WF ${r.wf_pooled_without?.toFixed(4)} ${r.decision}`).join(' | ') : 'ablation missing');
-  check('T2 ablation movement recorded (no-cat re-ranks 182/198, max 68, EV ranking)',
-    Array.isArray(ab) && ab.find((r) => r.term === 'category effects')?.rows_moved === 182
-    && ab.find((r) => r.term === 'category effects')?.max_displacement === 68,
-    ab ? JSON.stringify(ab.find((r) => r.term === 'category effects')) : 'ablation missing');
+  check('T1 additive: 7 rows (baseline + 6 terms), only size KEEP, LOO/WF match independent recompute',
+    Array.isArray(ab) && ab.length === 7 && ab.every((r) =>
+      want[r.term] && approx(r.loo, want[r.term].loo)
+      && approx(r.wf_pooled, want[r.term].wf) && r.decision === want[r.term].decision),
+    ab ? ab.map((r) => `${r.term} LOO ${r.loo?.toFixed(4)} WF ${r.wf_pooled?.toFixed(4)} ${r.decision}`).join(' | ') : 'ablation missing');
+  check('T1 range honesty: LOO within×3 45.3% / P25–P75 57.0% / P10–P90 82.0%; WF 43.2% / 59.1% / 75.0%',
+    DATA?.fit?.range_honesty
+    && Math.abs(DATA.fit.range_honesty.loo_within3 - 58 / 128) < 0.001
+    && Math.abs(DATA.fit.range_honesty.loo_p2575 - 73 / 128) < 0.001
+    && Math.abs(DATA.fit.range_honesty.loo_p1090 - 105 / 128) < 0.001
+    && Math.abs(DATA.fit.range_honesty.wf_within3 - 19 / 44) < 0.001
+    && Math.abs(DATA.fit.range_honesty.wf_p2575 - 26 / 44) < 0.001
+    && Math.abs(DATA.fit.range_honesty.wf_p1090 - 33 / 44) < 0.001,
+    DATA?.fit?.range_honesty ? JSON.stringify(DATA.fit.range_honesty) : 'range_honesty missing');
 }
 {
   const bySlug = new Map(snap.protocols.map((p) => [p.slug, p]));
@@ -238,8 +245,8 @@ const DATA = (() => {
     return r && Array.isArray(r.comps) && JSON.stringify(r.comps.map((c) => c.slug)) === JSON.stringify(slugs);
   };
   check('T3 comps spot-check rank 1 / 99 / 198 (EV ranks)',
-    spot(1, ['solstice', 'zerobase-cedefi', 'bitway-earn'])
-    && spot(99, ['fables', 'serum', 'osmosis-dex'])
+    spot(1, ['reservoir-protocol', 'frankencoin', 'inverse-finance-firm'])
+    && spot(99, ['harvest-finance', 'yield-yak-aggregator', 'badger-dao'])
     && spot(198, ['api3', 'ekubo', 'pumpbtc']),
     `r1 ${rows[0]?.comps?.map((c) => c.slug).join(',')}; r99 ${rows[98]?.comps?.map((c) => c.slug).join(',')}; r198 ${rows[197]?.comps?.map((c) => c.slug).join(',')}`);
   const sym = rows.find((r) => r.slug === 'symbiotic');
@@ -251,7 +258,7 @@ const DATA = (() => {
 {
   const collapsed = rows.filter((r) => r.p10_usd === r.p90_usd);
   const wantStable = {
-    'steakhouse-financial': 198, 'sentora-curator': 198, gauntlet: 197, veda: 196, usdd: 188,
+    usdd: 185, veda: 193, 'steakhouse-financial': 199, 'sentora-curator': 199, gauntlet: 194,
   };
   check('T4 collapsed intervals: 5 rows, stable_refits counted (not 200/200)',
     collapsed.length === 5 && collapsed.every((r) => r.stable_refits === wantStable[r.slug])
@@ -271,6 +278,12 @@ const DATA = (() => {
   check('T4 odds Brier 0.1959 in payload (base rate 0.2476)',
     DATA?.odds && Math.abs(DATA.odds.brier - 0.19592418476369128) < 1e-9,
     DATA?.odds ? `brier ${DATA.odds.brier}` : 'odds missing');
+  check('T1 odds CV: ten-fold 0.2175 / walk-forward 0.2482 (base 0.2484 / 0.2839), all 3 terms KEEP',
+    DATA?.odds?.cv && DATA.odds.cv.length === 4
+    && Math.abs(DATA.odds.brier_tenfold - 0.2175453356590111) < 0.0005
+    && Math.abs(DATA.odds.brier_wf - 0.24822762373078786) < 0.0005
+    && DATA.odds.cv.every((c, i) => (i === 0 ? c.term === 'base rate' : c.decision === 'keep')),
+    DATA?.odds ? `ten-fold ${DATA.odds.brier_tenfold}, WF ${DATA.odds.brier_wf}, cv ${JSON.stringify(DATA.odds.cv)}` : 'odds missing');
 }
 // No pasted validation numbers in the static dashboard shell: every number
 // the page shows must come from data.js at runtime. The sandbox ranges
@@ -280,23 +293,26 @@ const DATA = (() => {
 {
   const html = readFileSync(join(OUT, 'dashboard', 'index.html'), 'utf8');
   const forbidden = ['1.2908', '0.2493', '1.1740', '0.7647', '8.028969', '0.463147',
-    '184538021', '35830169', '2.0966', '1.290787', '104 / THIN 80'];
+    '184538021', '35830169', '2.0966', '1.290787', '104 / THIN 80',
+    '6.964567', '0.522266', '35364990', '777976039', '72029848', '1.2234', '1.2126', '25 / THIN 138'];
   const hits = forbidden.filter((s) => html.includes(s));
   check('no validation literals in index.html', hits.length === 0, hits.join(', ') || 'none found');
 }
 // Same rule for the dashboard script (radar-3 D-fix, review N5): B1 slipped
 // through because the grep above only covered index.html. The forbidden list
 // is the same validation literals — all of them are rendered from data.js at
-// runtime — plus the stale '142 places' (the B1 value, corrected to 143).
+// runtime — plus the stale '142 places' (the B1 value, corrected to 143 in
+// radar-6 and 148 in radar-7).
 // Allowlisted hand-typed literals, all verified correct and documented:
-// '≈ 3.6' (e^1.29), 'roughly 24×',
+// the e^LOO factor is computed (Math.exp), 'roughly 24×' was removed,
 // '100,000×'/'10,000×' (threshold restatements), '7 steps', sandbox ranges.
-// (Radar-5: the FARM-review sentence renders its count from
+// (Radar-7: the FARM-review sentence renders its count from
 // DATA.verdict_counts.FARM, not a literal.)
 {
   const js = readFileSync(join(OUT, 'dashboard', 'app.js'), 'utf8');
   const forbiddenJs = ['1.2908', '0.2493', '1.1740', '0.7647', '8.028969', '0.463147',
-    '184538021', '35830169', '2.0966', '1.290787', '104 / THIN 80', '142 places'];
+    '184538021', '35830169', '2.0966', '1.290787', '104 / THIN 80', '142 places',
+    '6.964567', '0.522266', '35364990', '777976039', '72029848', '1.2234', '1.2126', '25 / THIN 138'];
   const hitsJs = forbiddenJs.filter((s) => js.includes(s));
   check('no validation literals in app.js', hitsJs.length === 0, hitsJs.join(', ') || 'none found');
 }

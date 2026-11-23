@@ -1,9 +1,10 @@
-// Deterministic bootstrap for radar-6 (spec D10, ranking key updated T1).
+// Deterministic bootstrap for radar-7 (spec D10, ranking key updated T1).
 //
-// B = 200 refits of the V1 fitted model. Each refit resamples the 128
-// live-token rows with replacement, refits the 11-parameter OLS (design
-// fixed from the full sample — the nine BIG categories are not re-derived
-// per resample), and predicts the fitted value for every board row
+// B = 200 refits of the radar-7 fitted model (intercept + ln(TVL) only —
+// the additive ablation kept no category term, so there are no dummies
+// to re-derive per resample). Each refit resamples the 128
+// live-token rows with replacement, refits the 2-parameter OLS, and
+// predicts the fitted value for every board row
 // with growth/maturity held fixed and odds NOT refit. Rows are re-ranked
 // within each refit by predicted EXPECTED value (predicted fitted × the
 // row's fixed odds; ties: slug ascending), because the board itself is
@@ -12,15 +13,6 @@
 // PRNG is mulberry32, seed 20261122. Quantiles: P10 = index 19, P90 =
 // index 179 of the 200 sorted values (0-based). Rank range = [min, max]
 // rank across the 200 refits.
-//
-// A resample can draw no row of a category (Bridge, n=6, in refits 10 and
-// 184 at this seed): that dummy is unidentified, so olsBootstrap drops the
-// column and returns effect 0 for it (see lib/ols.ts). The spec-time script
-// divided by the zero pivot instead and produced all-NaN betas for those
-// refits; its published D10 numbers are that artifact (its rank ranges are
-// alphabetical ranks — steakhouse [1,152] is its alphabetical rank). This
-// implementation reports the honest bootstrap; entry/BUILD.md (radar-3)
-// carries the full evidence.
 import { mulberry32, olsBootstrap } from './ols.ts';
 
 export interface BootstrapInput {
@@ -49,8 +41,9 @@ export const BOOTSTRAP_SEED = 20261122;
 
 /**
  * Run the bootstrap. `design`/`y` are the full-sample live-token design
- * rows and ln(mcap) outcomes; `big` is the nine BIG categories in the same
- * order as the design's dummy columns. Returns one result per board row,
+ * rows and ln(mcap) outcomes; `big` is the dummy-category list in the
+ * same order as the design's dummy columns — empty in radar-7 (the
+ * shipped design has no dummies). Returns one result per board row,
  * in the same order as `rows`.
  */
 export function bootstrapIntervals(

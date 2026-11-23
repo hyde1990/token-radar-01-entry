@@ -95,3 +95,51 @@ export function olsBootstrap(X: readonly (readonly number[])[], y: readonly numb
 
 export const dot = (r: readonly number[], b: readonly number[]): number =>
   r.reduce((s, v, i) => s + v * b[i]!, 0);
+
+/**
+ * Ridge regression (radar-7 T1): beta = (X'X + diag(pen))^-1 X'y, with
+ * `pen[a]` the penalty on column a (0 = unpenalized). Like olsBootstrap,
+ * an all-zero column is dropped first and its effect returned as 0 — a
+ * zero column plus its penalty is still unidentified in the limit the
+ * penalty is meant to shrink, not to invent. The radar-7 additive
+ * ablation penalizes only the category/family dummy columns (pen 10);
+ * intercept, slope and the fitted growth/age/chain columns are
+ * unpenalized. Penalties are in X'X units (n = 128, dummy column sums
+ * 6–20), so pen 10 is moderate shrinkage: at pen 100 the category
+ * effects nearly vanish, at pen 1 they are near-OLS.
+ */
+export function ridge(
+  X: readonly (readonly number[])[],
+  y: readonly number[],
+  pen: readonly number[],
+): number[] {
+  const k = X[0]!.length;
+  const keep: number[] = [];
+  for (let a = 0; a < k; a++) {
+    let nz = false;
+    for (let i = 0; i < X.length; i++) {
+      if (X[i]![a] !== 0) {
+        nz = true;
+        break;
+      }
+    }
+    if (nz) keep.push(a);
+  }
+  const Xr = X.map((r) => keep.map((a) => r[a]!));
+  const kk = keep.length;
+  const XtX: number[][] = Array.from({ length: kk }, () => new Array<number>(kk).fill(0));
+  const Xty: number[] = new Array<number>(kk).fill(0);
+  for (let i = 0; i < Xr.length; i++) {
+    for (let a = 0; a < kk; a++) {
+      Xty[a]! += Xr[i]![a]! * y[i]!;
+      for (let b = 0; b < kk; b++) XtX[a]![b]! += Xr[i]![a]! * Xr[i]![b]!;
+    }
+  }
+  for (let a = 0; a < kk; a++) XtX[a]![a]! += pen[keep[a]!]!;
+  const br = solve(XtX, Xty);
+  const out = new Array<number>(k).fill(0);
+  keep.forEach((a, i) => {
+    out[a] = br[i]!;
+  });
+  return out;
+}
