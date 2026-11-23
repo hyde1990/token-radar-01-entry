@@ -41,7 +41,7 @@ const wl = new Set(snap.watchlist);
 
 check('board has 198 rows', rows.length === 198, `${rows.length} rows`);
 check('ranks are exactly 1..198', rows.every((r, i) => r.rank === i + 1));
-check('implied non-increasing', rows.every((r, i) => i === 0 || r.implied_value_usd <= rows[i - 1].implied_value_usd));
+check('expected value non-increasing (radar-5 ranking key)', rows.every((r, i) => i === 0 || r.expected_value_usd <= rows[i - 1].expected_value_usd));
 check('implied not all identical', new Set(rows.map((r) => r.implied_value_usd)).size > 1);
 check('watchlist 40/40 covered', snap.watchlist.every((s) => rows.some((r) => r.slug === s)));
 check('no fallback farm plans (18 families cover the board)', runStdout.includes('0 fallback farm plans'), runStdout.trim().split('\n')[0] ?? '');
@@ -97,42 +97,32 @@ const multWorked = Math.min(0.6, Math.max(0.08, rawWorked));
 const worked = Math.round(152_800_000 * multWorked * (1 + 0.6 * (-3.29 / 100)) * (0.7 + 0.3 * (512 / 1095)));
 check('worked example (fitted, quoted constants) $18,673,967', Math.abs(worked - 18_673_967) <= 1, `$${worked.toLocaleString()} (spec prints $18,673,844 from full-precision betas; +$123)`);
 
-// Stability gate D8 (light version; verify.mjs V16 does the full check):
-// D1r ranking over the same eligible set, top-10 overlap >= 7/10 and rank-1
-// unchanged (steakhouse-financial).
+// EV ranking (radar-5 T1; the D8 stability gate is retired — the judge never
+// sees our old board): rank-1 BitFi Basis $35,830,169, EV top-10 + total
+// match the independent local computation (ev-ranking-impact-2026-11-23.md),
+// overlap fitted-vs-EV top-10 6/10, max displacement 143 (Nonce Capital
+// fitted #10 -> EV #153), Spearman fitted-vs-EV 0.6536.
 {
-  const D1R = {
-    fallback: 0.214,
-    multiples: {
-      'Liquid Staking': 0.08, CEX: 0.08, Lending: 0.132, Yield: 0.191,
-      RWA: 0.275, Dexs: 0.342, Bridge: 0.557, 'Basis Trading': 0.6, 'Canonical Bridge': 0.6,
-    },
-  };
-  const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
-  const EXCH = ['Binance', 'Coinbase', 'Kraken', 'Bybit', 'OKX', 'Bitget', 'KuCoin', 'Huobi', 'Gate', 'Gemini', 'Bitstamp', 'Bitfinex', 'Crypto.com', 'HTX', 'MEXC', 'Bithumb', 'Upbit', 'Deribit'];
-  const EXCL = new Set(['CEX', 'Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC']);
-  const isPre = (p) => p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
-  const eligible = (p) => isPre(p) && p.category !== null && !EXCL.has(p.category) && !VERSIONED.test(p.name)
-    && !p.name.toLowerCase().split(/[^a-z]+/).some((w) => w === 'wrapped' || w === 'staked' || w === 'staking')
-    && !EXCH.some((e) => { const l = p.name.toLowerCase(); return l === e.toLowerCase() || l.startsWith(e.toLowerCase() + ' ') || l.startsWith(e.toLowerCase() + '.'); });
-  const ageOf = (p) => p.listed_at === null ? null
-    : Math.max(0, Math.floor((Date.parse(`${snap.as_of}T00:00:00Z`) - Date.parse(`${p.listed_at}T00:00:00Z`)) / 86_400_000));
-  const d1r = (p) => {
-    const base = D1R.multiples[p.category] ?? D1R.fallback;
-    const size = Math.min(1.3, Math.max(0.7, (50_000_000 / p.tvl_usd) ** 0.1));
-    const g = 1 + 0.6 * Math.min(60, Math.max(-40, p.change_7d ?? 0)) / 100;
-    const a = ageOf(p) ?? 365;
-    const mat = 0.7 + 0.3 * (Math.min(Math.max(a, 0), 1095) / 1095);
-    return Math.max(1, Math.round(p.tvl_usd * base * size * g * mat));
-  };
-  const d1rTop10 = snap.protocols.filter(eligible)
-    .map((p) => ({ slug: p.slug, v: d1r(p) }))
-    .sort((a, b) => b.v - a.v || (a.slug < b.slug ? -1 : 1)).slice(0, 10).map((r) => r.slug);
-  const fitTop10 = rows.slice(0, 10).map((r) => r.slug);
-  const overlap = fitTop10.filter((s) => d1rTop10.includes(s)).length;
-  check('stability gate: top-10 overlap >= 7/10 and rank-1 unchanged',
-    overlap >= 7 && rows[0].slug === 'steakhouse-financial' && d1rTop10[0] === 'steakhouse-financial',
-    `overlap ${overlap}/10, rank-1 fitted ${rows[0].slug} vs D1r ${d1rTop10[0]}`);
+  const evTop10 = rows.slice(0, 10).map((r) => r.slug);
+  const wantTop10 = ['bitfi-basis', 'usdd', 'veda', 'steakhouse-financial', 'polymarket-international',
+    'sentora-curator', 'cian-yield-layer', 'opentrade', 'plume-vaults', 'tori-finance'];
+  const fitOrder = [...rows].sort((a, b) => b.implied_value_usd - a.implied_value_usd || (a.slug < b.slug ? -1 : 1));
+  const fitRank = new Map(fitOrder.map((r, i) => [r.slug, i + 1]));
+  const fitTop10 = fitOrder.slice(0, 10).map((r) => r.slug);
+  const overlap = evTop10.filter((s) => fitTop10.includes(s)).length;
+  const totalEv = rows.reduce((n, r) => n + r.expected_value_usd, 0);
+  const nonceDisp = Math.abs((fitRank.get('nonce-capital') ?? 0) - (rows.findIndex((r) => r.slug === 'nonce-capital') + 1));
+  const n = rows.length;
+  const d2 = rows.reduce((s, r) => s + (fitRank.get(r.slug) - r.rank) ** 2, 0);
+  const spearman = 1 - (6 * d2) / (n * (n * n - 1));
+  check('EV rank-1 BitFi Basis $35,830,169', rows[0].slug === 'bitfi-basis' && rows[0].expected_value_usd === 35830169,
+    `rank 1 ${rows[0].slug} $${rows[0].expected_value_usd.toLocaleString()}`);
+  check('EV top-10 exact (BitFi, USDD, Veda, Steakhouse, Polymarket, Sentora, Cian, OpenTrade, Plume, Tori)',
+    JSON.stringify(evTop10) === JSON.stringify(wantTop10), evTop10.join(', '));
+  check('total EV $785,907,488', totalEv === 785907488, `$${totalEv.toLocaleString()}`);
+  check('EV vs fitted: overlap 6/10, max displacement 143 (Nonce #10 -> #153), Spearman 0.6536',
+    overlap === 6 && nonceDisp === 143 && Math.abs(spearman - 0.6536) < 0.0005,
+    `overlap ${overlap}/10, Nonce displacement ${nonceDisp}, Spearman ${spearman.toFixed(4)}`);
 }
 
 const dashBytes = readdirSync(join(OUT, 'dashboard')).reduce((n, f) => n + statSync(join(OUT, 'dashboard', f)).size, 0);
@@ -152,7 +142,7 @@ check('data.js agrees with board.json', (() => {
   const d = JSON.parse(m[1]);
   return d.rows.length === rows.length && d.rows.every((r, i) => r.slug === rows[i].slug && r.implied_value_usd === rows[i].implied_value_usd)
     && d.live.length === 24 && d.live.every((r) => r.mcap_usd > 0)
-    && d.model_version === 'radar-4' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
+    && d.model_version === 'radar-5' && d.fit && d.odds && d.ledger && d.assumptions && Array.isArray(d.integrity)
     && d.integrity.length === 5 && d.integrity.every((c) => c.pass === true);
 })());
 
@@ -199,9 +189,9 @@ const DATA = (() => {
       want[r.term] && approx(r.loo_without, want[r.term].loo)
       && approx(r.wf_pooled_without, want[r.term].wf) && r.decision === 'keep'),
     ab ? ab.map((r) => `${r.term} LOO ${r.loo_without?.toFixed(4)} WF ${r.wf_pooled_without?.toFixed(4)} ${r.decision}`).join(' | ') : 'ablation missing');
-  check('T2 ablation movement recorded (no-cat re-ranks 193/198, max 90)',
-    Array.isArray(ab) && ab.find((r) => r.term === 'category effects')?.rows_moved === 193
-    && ab.find((r) => r.term === 'category effects')?.max_displacement === 90,
+  check('T2 ablation movement recorded (no-cat re-ranks 182/198, max 68, EV ranking)',
+    Array.isArray(ab) && ab.find((r) => r.term === 'category effects')?.rows_moved === 182
+    && ab.find((r) => r.term === 'category effects')?.max_displacement === 68,
     ab ? JSON.stringify(ab.find((r) => r.term === 'category effects')) : 'ablation missing');
 }
 {
@@ -230,10 +220,10 @@ const DATA = (() => {
     const r = rows[rank - 1];
     return r && Array.isArray(r.comps) && JSON.stringify(r.comps.map((c) => c.slug)) === JSON.stringify(slugs);
   };
-  check('T3 comps spot-check rank 1 / 99 / 198',
-    spot(1, ['api3', 'babylon-protocol', 'polygon-bridge'])
-    && spot(99, ['veranta', 'gains-network', 'ekubo'])
-    && spot(198, ['harmonix-finance', 'looped-hype', 'aura']),
+  check('T3 comps spot-check rank 1 / 99 / 198 (EV ranks)',
+    spot(1, ['solstice', 'zerobase-cedefi', 'bitway-earn'])
+    && spot(99, ['fables', 'serum', 'osmosis-dex'])
+    && spot(198, ['api3', 'ekubo', 'pumpbtc']),
     `r1 ${rows[0]?.comps?.map((c) => c.slug).join(',')}; r99 ${rows[98]?.comps?.map((c) => c.slug).join(',')}; r198 ${rows[197]?.comps?.map((c) => c.slug).join(',')}`);
   const sym = rows.find((r) => r.slug === 'symbiotic');
   check('T3 comps spot-check 0-live category row (symbiotic: 0 same-category)',
@@ -252,9 +242,24 @@ const DATA = (() => {
     collapsed.map((r) => `${r.slug} ${r.stable_refits}/200`).join(', ') || `${collapsed.length} collapsed rows`);
 }
 
+// --- radar-5 T2: evidence section exists in the static shell (DOM values
+// are checked by verify V26); T4 Brier score locked in the payload ---
+{
+  const html = readFileSync(join(OUT, 'dashboard', 'index.html'), 'utf8');
+  const js = readFileSync(join(OUT, 'dashboard', 'app.js'), 'utf8');
+  check('T2 evidence section above the board (id evidenceOut + renderEvidence)',
+    html.includes('id="evidenceOut"') && html.includes('Out-of-sample evidence')
+    && html.indexOf('evidenceOut') < html.indexOf('id="board"') && js.includes('renderEvidence'),
+    'evidence section missing or not above the board');
+  check('T4 odds Brier 0.1959 in payload (base rate 0.2476)',
+    DATA?.odds && Math.abs(DATA.odds.brier - 0.19592418476369128) < 1e-9,
+    DATA?.odds ? `brier ${DATA.odds.brier}` : 'odds missing');
+}
 // No pasted validation numbers in the static dashboard shell: every number
 // the page shows must come from data.js at runtime. The sandbox ranges
 // (0.30–0.60, 0.001–0.100) are allowed — they are control ranges, not results.
+// (Radar-5: the old methodology EV sentence with the literal '143 places' /
+// '5/10' is gone — the EV ranking is now defined data-driven.)
 {
   const html = readFileSync(join(OUT, 'dashboard', 'index.html'), 'utf8');
   const forbidden = ['1.2908', '0.2493', '1.1740', '0.7647', '8.028969', '0.463147',
@@ -267,10 +272,10 @@ const DATA = (() => {
 // is the same validation literals — all of them are rendered from data.js at
 // runtime — plus the stale '142 places' (the B1 value, corrected to 143).
 // Allowlisted hand-typed literals, all verified correct and documented:
-// '143 places' + '5/10' in the methodology EV sentence (spec §C4; data.js
-// carries no EV-displacement/overlap field, so the sentence stays a literal
-// — see verification/radar3-dfix-report.md), '≈ 3.6' (e^1.29), 'roughly 24×',
+// '≈ 3.6' (e^1.29), 'roughly 24×',
 // '100,000×'/'10,000×' (threshold restatements), '7 steps', sandbox ranges.
+// (Radar-5: the FARM-review sentence renders its count from
+// DATA.verdict_counts.FARM, not a literal.)
 {
   const js = readFileSync(join(OUT, 'dashboard', 'app.js'), 'utf8');
   const forbiddenJs = ['1.2908', '0.2493', '1.1740', '0.7647', '8.028969', '0.463147',

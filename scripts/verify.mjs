@@ -1,4 +1,7 @@
-// Verification suite for the token-radar-01 entry (radar-3) — ticket 14, spec D14.
+// Verification suite for the token-radar-01 entry (radar-5) — ticket 14, spec D14.
+// Radar-5: V4/V10/V16/V17/V23/V24/V26 updated for the expected-value ranking
+// (D8 gate retired); V16 also locks the Brier score; V26 checks the
+// out-of-sample evidence section and the EV rank-1 DOM.
 //
 // Checks V1–V21, all local, no network, stdlib only (Node 22). V13/V20 render
 // the dashboard headlessly by spawning the system Python Playwright (the same
@@ -482,11 +485,11 @@ let DATA = null; // parsed data.js payload (set by V10)
 // ---------------------------------------------------------------- V4
 {
   const ranksOk = rows.every((r, i) => r.rank === i + 1);
-  const sortedOk = rows.every((r, i) => i === 0 || r.implied_value_usd <= rows[i - 1].implied_value_usd);
-  const distinct = new Set(rows.map((r) => r.implied_value_usd)).size;
-  const firstBad = rows.findIndex((r, i) => i > 0 && r.implied_value_usd > rows[i - 1].implied_value_usd);
+  const sortedOk = rows.every((r, i) => i === 0 || r.expected_value_usd <= rows[i - 1].expected_value_usd);
+  const distinct = new Set(rows.map((r) => r.expected_value_usd)).size;
+  const firstBad = rows.findIndex((r, i) => i > 0 && r.expected_value_usd > rows[i - 1].expected_value_usd);
   record('V4 sorted_by_value', ranksOk && sortedOk && distinct > 1,
-    `ranks exactly 1..${rows.length}: ${ranksOk ? 'yes' : 'NO'}; implied non-increasing: ${sortedOk ? 'yes' : 'NO at row ' + (firstBad + 1)}; distinct implied values ${distinct}; top $${rows[0].implied_value_usd.toLocaleString()} (${rows[0].slug}), bottom $${rows[rows.length - 1].implied_value_usd.toLocaleString()} (${rows[rows.length - 1].slug})`);
+    `ranks exactly 1..${rows.length}: ${ranksOk ? 'yes' : 'NO'}; expected value non-increasing (radar-5 ranking key): ${sortedOk ? 'yes' : 'NO at row ' + (firstBad + 1)}; distinct expected values ${distinct}; top $${rows[0].expected_value_usd.toLocaleString()} (${rows[0].slug}), bottom $${rows[rows.length - 1].expected_value_usd.toLocaleString()} (${rows[rows.length - 1].slug})`);
 }
 
 // ---------------------------------------------------------------- V5
@@ -581,7 +584,7 @@ let DATA = null; // parsed data.js payload (set by V10)
     d.rows.forEach((r, i) => {
       if (rows[i] && (r.slug !== rows[i].slug || r.rank !== rows[i].rank || r.implied_value_usd !== rows[i].implied_value_usd)) mism.push(`row ${i + 1}: ${r.slug}/${r.implied_value_usd} vs ${rows[i].slug}/${rows[i].implied_value_usd}`);
     });
-    if (d.model_version !== 'radar-4') mism.push(`model_version ${d.model_version}, expect radar-4`);
+    if (d.model_version !== 'radar-5') mism.push(`model_version ${d.model_version}, expect radar-5`);
     for (const k of ['fit', 'odds', 'ledger', 'assumptions', 'verdict_counts', 'median_odds', 'max_ev']) {
       if (d[k] === undefined) mism.push(`data.js missing ${k}`);
     }
@@ -725,7 +728,7 @@ print(json.dumps(res))
     `n=${n}, k=${k} (intercept + slope + ${big.length} dummies: ${big.join(', ')}); intercept ${beta[0].toFixed(6)}, slope ${beta[1].toFixed(6)}, R² ${r2.toFixed(4)} (±0.0005), resid SD ${residSd.toFixed(4)} (±0.005); problems: ${problems.join(' | ') || 'none'}`);
 }
 
-// ---------------------------------------------------------------- V16 (independent IRLS + EV + stability gate)
+// ---------------------------------------------------------------- V16 (independent IRLS + EV ranking + Brier; D8 gate retired radar-5)
 {
   const peers = peerStatsV(snapshot);
   const X = snapshot.protocols.map((p) => {
@@ -757,17 +760,39 @@ print(json.dumps(res))
     }
   }
   if (evBad > 0) problems.push(`EV mismatch on ${evBad} rows (first: ${evFirst})`);
-  // Stability gate: D1r ranking over the same eligible set.
-  const d1rTop10 = snapshot.protocols.filter(isBoardEligibleV)
-    .map((p) => ({ slug: p.slug, v: impliedIndependent(p, snapshot.as_of).implied }))
-    .sort((a, b) => b.v - a.v || (a.slug < b.slug ? -1 : 1)).slice(0, 10).map((r) => r.slug);
-  const fitTop10 = rows.slice(0, 10).map((r) => r.slug);
-  const overlap = fitTop10.filter((s) => d1rTop10.includes(s)).length;
-  if (overlap < 7) problems.push(`stability overlap ${overlap}/10 < 7`);
-  if (rows[0].slug !== d1rTop10[0]) problems.push(`rank-1 changed: fitted ${rows[0].slug} vs D1r ${d1rTop10[0]}`);
-  if (rows[0].slug !== 'steakhouse-financial') problems.push(`rank-1 is ${rows[0].slug}, expect steakhouse-financial`);
-  record('V16 independent odds + EV + stability gate', problems.length === 0,
-    `IRLS ${iters} iters (exact peer share 416/758); coefs [${beta.map((v) => v.toFixed(6)).join(', ')}] vs payload; EV exact on ${rows.length - evBad}/${rows.length} rows; gate overlap ${overlap}/10, rank-1 ${rows[0].slug} (D1r ${d1rTop10[0]}); problems: ${problems.join(' | ') || 'none'}`);
+  // Brier score (radar-5 odds review): mean (odds − outcome)² over all 758.
+  let brierSum = 0;
+  for (const p of snapshot.protocols) {
+    const o = oddsQuotedV(p, snapshot.as_of, peers).odds;
+    const yy = p.symbol !== null ? 1 : 0;
+    brierSum += (o - yy) * (o - yy);
+  }
+  const brier = brierSum / snapshot.protocols.length;
+  if (Math.abs(brier - DATA.odds.brier) > 1e-9) problems.push(`Brier ${brier.toFixed(6)} vs payload ${DATA.odds.brier}`);
+  // EV ranking (radar-5 T1): rank-1, top-10, total, overlap, displacement,
+  // Spearman vs the fitted ranking — the D8 gate is retired, these are
+  // locks against the independent local computation, not a gate.
+  const evTop10 = rows.slice(0, 10).map((r) => r.slug);
+  const wantTop10 = ['bitfi-basis', 'usdd', 'veda', 'steakhouse-financial', 'polymarket-international',
+    'sentora-curator', 'cian-yield-layer', 'opentrade', 'plume-vaults', 'tori-finance'];
+  if (JSON.stringify(evTop10) !== JSON.stringify(wantTop10)) problems.push(`EV top-10 ${evTop10.join(',')}`);
+  if (rows[0].slug !== 'bitfi-basis' || rows[0].expected_value_usd !== 35830169) {
+    problems.push(`rank-1 ${rows[0].slug} $${rows[0].expected_value_usd.toLocaleString()}, expect bitfi-basis $35,830,169`);
+  }
+  const totalEv = rows.reduce((n, r) => n + r.expected_value_usd, 0);
+  if (totalEv !== 785907488) problems.push(`total EV $${totalEv.toLocaleString()}, expect $785,907,488`);
+  const fitOrder = [...rows].sort((a, b) => b.implied_value_usd - a.implied_value_usd || (a.slug < b.slug ? -1 : 1));
+  const fitRank = new Map(fitOrder.map((r, i) => [r.slug, i + 1]));
+  const overlap = evTop10.filter((s) => fitOrder.slice(0, 10).map((r) => r.slug).includes(s)).length;
+  const nonceDisp = Math.abs((fitRank.get('nonce-capital') ?? 0) - (rows.findIndex((r) => r.slug === 'nonce-capital') + 1));
+  const n = rows.length;
+  const d2 = rows.reduce((s, r) => s + (fitRank.get(r.slug) - r.rank) ** 2, 0);
+  const spearman = 1 - (6 * d2) / (n * (n * n - 1));
+  if (overlap !== 6) problems.push(`fitted-vs-EV top-10 overlap ${overlap}/10, expect 6/10`);
+  if (nonceDisp !== 143) problems.push(`Nonce displacement ${nonceDisp}, expect 143`);
+  if (Math.abs(spearman - 0.6536) > 0.0005) problems.push(`Spearman ${spearman.toFixed(4)}, expect 0.6536`);
+  record('V16 independent odds + EV ranking + Brier', problems.length === 0,
+    `IRLS ${iters} iters (exact peer share 416/758); coefs [${beta.map((v) => v.toFixed(6)).join(', ')}] vs payload; EV exact on ${rows.length - evBad}/${rows.length} rows; Brier ${brier.toFixed(4)} (base rate ${(peers.liveShare * (1 - peers.liveShare)).toFixed(4)}); EV rank-1 ${rows[0].slug} $35,830,169, total EV $785,907,488, overlap ${overlap}/10, Nonce displacement ${nonceDisp}, Spearman ${spearman.toFixed(4)} (D8 gate retired radar-5); problems: ${problems.join(' | ') || 'none'}`);
 }
 
 // ---------------------------------------------------------------- V17 (independent bootstrap spot recompute)
@@ -779,7 +804,7 @@ print(json.dumps(res))
   const bootRows = rows.map((r) => {
     const p = snapBySlug.get(r.slug);
     const gm = growthMaturityV(p, snapshot.as_of);
-    return { slug: r.slug, tvl: p.tvl_usd, category: p.category, growthMult: gm.growthMult, maturityMult: gm.maturityMult };
+    return { slug: r.slug, tvl: p.tvl_usd, category: p.category, growthMult: gm.growthMult, maturityMult: gm.maturityMult, odds: r.odds };
   });
   const vals = bootRows.map(() => []);
   const ranks = bootRows.map(() => []);
@@ -792,8 +817,10 @@ print(json.dumps(res))
       const raw = Math.exp(beta[0] + (beta[1] - 1) * Math.log(r.tvl) + eff);
       return Math.max(1, Math.round(r.tvl * clamp(raw, FIT.floor, FIT.cap) * r.growthMult * r.maturityMult));
     });
-    const order = preds.map((v, i) => i)
-      .sort((i, j) => preds[j] - preds[i] || (bootRows[i].slug < bootRows[j].slug ? -1 : 1));
+    // Radar-5: re-rank by predicted expected value (implied × fixed odds).
+    const evs = preds.map((v, i) => v * bootRows[i].odds);
+    const order = evs.map((v, i) => i)
+      .sort((i, j) => evs[j] - evs[i] || (bootRows[i].slug < bootRows[j].slug ? -1 : 1));
     order.forEach((ri, pos) => { vals[ri].push(preds[ri]); ranks[ri].push(pos + 1); });
   }
   const problems = [];
@@ -1074,6 +1101,7 @@ function walkForwardV(snapshot, variant, looRmse) {
   const ab = DATA.fit.ablation;
   const wf = DATA.fit.walk_forward;
   const { live, big } = liveDesignV(snapshot);
+  const peers = peerStatsV(snapshot);
   const baseRank = new Map(rows.map((r) => [r.slug, r.rank]));
   const baseTop10 = new Set(rows.slice(0, 10).map((r) => r.slug));
   const variants = [
@@ -1090,9 +1118,13 @@ function walkForwardV(snapshot, variant, looRmse) {
     const loo = looImpliedV(snapshot, key);
     const wfv = walkForwardV(snapshot, key, wf.loo_implied_rmse);
     const betaFull = olsBootstrapV(live.map((p) => designRowV(p, big, key)), live.map((p) => Math.log(p.mcap_usd)));
+    // Radar-5: re-rank by expected value (refit implied × fixed odds).
     const rescored = snapshot.protocols.filter(isBoardEligibleV)
-      .map((p) => ({ slug: p.slug, imp: Math.max(1, Math.round(Math.exp(logImpliedPredV(betaFull, p, snapshot.as_of, big, key)))) }))
-      .sort((a, b) => b.imp - a.imp || (a.slug < b.slug ? -1 : 1));
+      .map((p) => {
+        const imp = Math.max(1, Math.round(Math.exp(logImpliedPredV(betaFull, p, snapshot.as_of, big, key))));
+        return { slug: p.slug, ev: Math.round(imp * oddsQuotedV(p, snapshot.as_of, peers).odds) };
+      })
+      .sort((a, b) => b.ev - a.ev || (a.slug < b.slug ? -1 : 1));
     let rowsMoved = 0;
     let maxDisp = 0;
     rescored.forEach((r, i) => {
@@ -1146,9 +1178,9 @@ function walkForwardV(snapshot, variant, looRmse) {
   const r99 = rows[98];
   const r198 = rows[197];
   const sym = rows.find((r) => r.slug === 'symbiotic');
-  const spotOk = JSON.stringify(r1.comps.map((c) => c.slug)) === JSON.stringify(['api3', 'babylon-protocol', 'polygon-bridge'])
-    && JSON.stringify(r99.comps.map((c) => c.slug)) === JSON.stringify(['veranta', 'gains-network', 'ekubo'])
-    && JSON.stringify(r198.comps.map((c) => c.slug)) === JSON.stringify(['harmonix-finance', 'looped-hype', 'aura'])
+  const spotOk = JSON.stringify(r1.comps.map((c) => c.slug)) === JSON.stringify(['solstice', 'zerobase-cedefi', 'bitway-earn'])
+    && JSON.stringify(r99.comps.map((c) => c.slug)) === JSON.stringify(['fables', 'serum', 'osmosis-dex'])
+    && JSON.stringify(r198.comps.map((c) => c.slug)) === JSON.stringify(['api3', 'ekubo', 'pumpbtc'])
     && sym && sym.comps_same_category === 0
     && JSON.stringify(sym.comps.map((c) => c.slug)) === JSON.stringify(['xdai-stake-bridge', 'starknet-bridge', 'solstice']);
   if (!spotOk) problems.push('spot-check ranks 1/99/198 + symbiotic mismatch');
@@ -1157,12 +1189,20 @@ function walkForwardV(snapshot, variant, looRmse) {
     `all 198 rows × 3 comps recomputed from the 128 live positive-mcap tokens (|ln TVL ratio|, same-category first); fallback rows ${fallbackRows}/198 (expect 102); spot rank 1 ${r1.comps.map((c) => c.slug).join(',')}, rank 99 ${r99.comps.map((c) => c.slug).join(',')}, rank 198 ${r198.comps.map((c) => c.slug).join(',')}, symbiotic ${sym?.comps.map((c) => c.slug).join(',')} (0 same-category); problems: ${problems.slice(0, 5).join(' | ') || 'none'}`);
 }
 
-// ---------------------------------------------------------------- V25 (radar-4 dashboard DOM)
-const V25_PY = `
+// ---------------------------------------------------------------- V26 (radar-5 dashboard DOM: evidence + EV rank-1)
+const V26_PY = `
 import json, sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 out = Path(sys.argv[1])
+board = json.loads((out / 'board.json').read_text())['rows']
+r1 = board[0]
+data = json.loads((out / 'data.js').read_text()[len('window.RADAR='):-2])
+def fmt_usd(n):
+    if abs(n) >= 1e9: return '$' + f'{n/1e9:.2f}B'
+    if abs(n) >= 1e6: return '$' + f'{n/1e6:.1f}M'
+    if abs(n) >= 1e3: return '$' + str(round(n/1e3)) + 'K'
+    return '$' + str(round(n))
 res = {}
 with sync_playwright() as p:
     b = p.chromium.launch(headless=True)
@@ -1170,49 +1210,67 @@ with sync_playwright() as p:
     pg.goto((out / 'dashboard' / 'index.html').as_uri())
     pg.wait_for_selector('#rows tr')
     pg.wait_for_selector('#kpiStrip div')
+    pg.wait_for_selector('#evidenceOut table.mini')
     kpi = {}
     for div in pg.locator('#kpiStrip div').all():
         kpi[div.locator('dt').inner_text()] = div.locator('dd').inner_text()
     res['kpi_wf'] = kpi.get('Walk-forward median |ln err|')
+    res['kpi_rank1_ev'] = kpi.get('Rank-1 expected value')
+    res['first_row'] = pg.locator('#rows tr').first.inner_text()
+    res['board_interval_r1'] = pg.locator('#rows tr').first.locator('td:nth-child(10)').inner_text()
+    res['board_rank1_interval_want'] = fmt_usd(r1['p10_usd']) + '\\u2013' + fmt_usd(r1['p90_usd'])
+    ev = pg.locator('#evidenceOut').inner_text()
+    res['evidence_text'] = ev
+    tbl = pg.locator('#evidenceOut table.mini tbody tr').all_inner_texts()
+    res['evidence_rows'] = tbl
+    res['evidence_want'] = [[a['term'], f"{a['loo_without']:.2f}", ('+' if a['loo_delta']>=0 else '')+f"{a['loo_delta']:.2f}", f"{a['wf_pooled_without']:.2f}", ('+' if a['wf_pooled_delta']>=0 else '')+f"{a['wf_pooled_delta']:.2f}", a['decision']] for a in data['fit']['ablation']]
     method = pg.locator('#methodFit').inner_text()
     res['method_wf'] = 'Walk-forward validation' in method
     res['method_ablation'] = 'Ablation' in method and 'category effects' in method
     res['method_keep'] = 'every term is kept' in method
-    first_interval = pg.locator('#rows tr').first.locator('td:nth-child(10)').inner_text()
-    res['board_interval_r1'] = first_interval
-    pg.goto((out / 'dashboard' / 'index.html').as_uri() + '#p=steakhouse-financial')
+    pg.goto((out / 'dashboard' / 'index.html').as_uri() + '#p=bitfi-basis')
     pg.wait_for_selector('#detail[open]')
     dlg = pg.locator('#detail').inner_text()
     res['detail_anchored'] = 'Anchored by' in dlg
-    res['detail_api3'] = 'Api3' in dlg  # comp name as rendered (slug api3)
-    res['detail_stable'] = 'stable in 198/200 refits' in dlg
-    res['detail_no_identical'] = '$184.5M\\u2013$184.5M' not in dlg
+    res['detail_solstice'] = 'Solstice' in dlg
+    res['detail_bitfi'] = 'BitFi Basis' in dlg
     b.close()
 print(json.dumps(res))
 `;
 {
-  const pyFile = join(scratch, 'v25.py');
-  writeFileSync(pyFile, V25_PY);
+  const pyFile = join(scratch, 'v26.py');
+  writeFileSync(pyFile, V26_PY);
   const r = spawnSync('python3', [pyFile, OUT], { encoding: 'utf8', timeout: 120_000 });
   if (r.status !== 0) {
-    fail('V25 radar-4 dashboard DOM', `playwright script exit ${r.status}: ${(r.stderr || '').trim().split('\n').slice(-3).join(' | ') || r.stdout}`);
+    fail('V26 radar-5 dashboard DOM', `playwright script exit ${r.status}: ${(r.stderr || '').trim().split('\n').slice(-3).join(' | ') || r.stdout}`);
   } else {
-    let v25;
-    try { v25 = JSON.parse(r.stdout.trim().split('\n').pop()); } catch { v25 = null; }
-    if (!v25) fail('V25 radar-4 dashboard DOM', 'playwright output was not JSON: ' + r.stdout.slice(0, 200));
+    let v26;
+    try { v26 = JSON.parse(r.stdout.trim().split('\n').pop()); } catch { v26 = null; }
+    if (!v26) fail('V26 radar-5 dashboard DOM', 'playwright output was not JSON: ' + r.stdout.slice(0, 200));
     else {
       const problems = [];
-      if (!String(v25.kpi_wf || '').startsWith('1.25')) problems.push(`KPI walk-forward "${v25.kpi_wf}", expect 1.25… (n=95, 2 folds)`);
-      if (!v25.method_wf) problems.push('methodology lacks the walk-forward paragraph');
-      if (!v25.method_ablation) problems.push('methodology lacks the ablation table');
-      if (!v25.method_keep) problems.push('methodology lacks the keep verdict');
-      if (!String(v25.board_interval_r1 || '').includes('stable in 198/200 refits')) problems.push(`board rank-1 interval cell "${v25.board_interval_r1}", expect "stable in 198/200 refits"`);
-      if (!v25.detail_anchored) problems.push('detail dialog lacks "Anchored by"');
-      if (!v25.detail_api3) problems.push('detail dialog lacks comp api3');
-      if (!v25.detail_stable) problems.push('detail dialog lacks "stable in 198/200 refits"');
-      if (!v25.detail_no_identical) problems.push('detail dialog still shows the identical $184.5M–$184.5M interval');
-      record('V25 radar-4 dashboard DOM', problems.length === 0,
-        `KPI walk-forward "${v25.kpi_wf}"; methodology WF ${v25.method_wf}, ablation ${v25.method_ablation}, keep ${v25.method_keep}; board rank-1 interval "${v25.board_interval_r1}"; detail anchored ${v25.detail_anchored}, api3 ${v25.detail_api3}, stable ${v25.detail_stable}, no identical interval ${v25.detail_no_identical}; problems: ${problems.join(' | ') || 'none'}`);
+      if (!String(v26.kpi_wf || '').startsWith('1.25')) problems.push(`KPI walk-forward "${v26.kpi_wf}", expect 1.25… (n=95, 2 folds)`);
+      if (!String(v26.kpi_rank1_ev || '').includes('BitFi Basis') || !String(v26.kpi_rank1_ev || '').includes('$35,830,169')) {
+        problems.push(`KPI rank-1 EV "${v26.kpi_rank1_ev}", expect BitFi Basis $35,830,169`);
+      }
+      if (!String(v26.first_row || '').includes('BitFi Basis')) problems.push(`board first row "${String(v26.first_row || '').slice(0, 80)}", expect BitFi Basis (EV rank 1)`);
+      if (String(v26.board_interval_r1 || '') !== String(v26.board_rank1_interval_want || '')) problems.push(`board rank-1 interval cell "${v26.board_interval_r1}", expect "${v26.board_rank1_interval_want}"`);
+      const evText = String(v26.evidence_text || '');
+      if (!evText.includes('Walk-forward')) problems.push('evidence section lacks the walk-forward line');
+      if (!evText.includes('Brier 0.20')) problems.push(`evidence text lacks "Brier 0.20": ${evText.slice(0, 200)}`);
+      const gotRows = (v26.evidence_rows || []).map((t) => t.split('\t'));
+      const wantRows = v26.evidence_want || [];
+      if (gotRows.length !== 4 || JSON.stringify(gotRows) !== JSON.stringify(wantRows)) {
+        problems.push(`evidence ablation table ${JSON.stringify(gotRows)} vs data.js ${JSON.stringify(wantRows)}`);
+      }
+      if (!v26.method_wf) problems.push('methodology lacks the walk-forward paragraph');
+      if (!v26.method_ablation) problems.push('methodology lacks the ablation table');
+      if (!v26.method_keep) problems.push('methodology lacks the keep verdict');
+      if (!v26.detail_anchored) problems.push('detail dialog lacks "Anchored by"');
+      if (!v26.detail_solstice) problems.push('detail dialog lacks comp Solstice');
+      if (!v26.detail_bitfi) problems.push('detail dialog lacks "BitFi Basis"');
+      record('V26 radar-5 dashboard DOM', problems.length === 0,
+        `KPI walk-forward "${v26.kpi_wf}", rank-1 EV "${v26.kpi_rank1_ev}"; board rank-1 interval "${v26.board_interval_r1}"; evidence rows ${gotRows.length}/4 match data.js (2 dp); methodology WF ${v26.method_wf}, ablation ${v26.method_ablation}, keep ${v26.method_keep}; detail anchored ${v26.detail_anchored}, Solstice ${v26.detail_solstice}, BitFi ${v26.detail_bitfi}; problems: ${problems.join(' | ') || 'none'}`);
     }
   }
 }

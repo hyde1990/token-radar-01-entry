@@ -38,7 +38,7 @@ button { cursor: pointer; }
 .top-meta { display: flex; flex-wrap: wrap; gap: var(--s3); color: var(--muted); font-size: 13px; margin: 0; }
 main { max-width: 1320px; margin: 0 auto; padding: 0 var(--s5) var(--s6); }
 
-.lede { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.6fr); gap: var(--s5); padding: var(--s4) 0; }
+.lede { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.6fr); gap: var(--s5); padding: var(--s3) 0; }
 .lede p { color: var(--muted); max-width: 68ch; margin-top: var(--s2); }
 .formula {
   font-family: var(--font); font-size: 13px; color: var(--accent-ink);
@@ -53,8 +53,8 @@ main { max-width: 1320px; margin: 0 auto; padding: 0 var(--s5) var(--s6); }
 .facts dd { margin: 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .controls {
-  display: flex; flex-wrap: wrap; align-items: end; gap: var(--s3);
-  padding: var(--s3) 0; border-top: 1px solid var(--border);
+  display: flex; flex-wrap: wrap; align-items: end; gap: var(--s2);
+  padding: var(--s2) 0; border-top: 1px solid var(--border);
 }
 .field { display: grid; gap: var(--s1); }
 .field label { color: var(--muted); font-size: 12px; }
@@ -62,7 +62,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 0 var(--s5) var(--s6); }
   min-height: 36px; padding: 0 var(--s2); border: 1px solid var(--border);
   border-radius: var(--radius); background: var(--surface); min-width: 170px;
 }
-.field input[type="search"] { min-width: 260px; }
+.field input[type="search"] { min-width: 230px; }
 .field input[type="number"] { min-width: 110px; }
 .check { display: flex; align-items: center; gap: var(--s2); min-height: 36px; font-size: 14px; }
 .check input { width: 16px; height: 16px; accent-color: var(--accent); }
@@ -153,7 +153,8 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 12
 }
 
 /* radar-3 additions: KPI/integrity strips, verdict chips, sandbox, compare, ledger, mini tables. */
-.kpi { display: grid; gap: var(--s2); padding: var(--s3) 0; border-top: 1px solid var(--border); }
+.kpi { display: grid; gap: var(--s2); padding: var(--s2) 0; border-top: 1px solid var(--border); }
+.evidence { padding: var(--s2) var(--s4); display: grid; gap: var(--s2); }
 .kpi-strip { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s4); margin: 0; }
 .kpi-strip div { display: grid; gap: 1px; }
 .kpi-strip dt { color: var(--muted); font-size: 12px; }

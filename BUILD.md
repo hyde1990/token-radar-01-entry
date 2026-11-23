@@ -756,3 +756,71 @@ disentuh: `dashboard/app.js`, `BUILD.md` (bagian ini + 3 hitungan suite),
   adalah `main.ts` membaca `MAKEFUN_OUTPUT_DIR` sebagai path (diizinkan).
 - **Tidak dilakukan (di luar Fase B):** README tidak diubah (Fase E),
   tidak ada bundle/check-submit/submit/push.
+
+## radar-5 (tickets T1–T6, spec radar-5) — 23 Nov 2026, Fase B (build)
+
+- **Basis:** radar-4 main `1832ce1`; kit fresh level 38 (spec-check
+  `verification/spec-check-radar5.md`: semua angka jangkar bereproduksi,
+  tidak ada mismatch). Branch `radar-5`, build-only; TIDAK push, TIDAK
+  submit/bundle. Tidak ada wallet baru, tidak ada secret di repo/log.
+- **T1 ranking key = expected value:** `buildBoard` sortir by
+  `expected_value_usd` menurun (implied tetap kolom value-if-launches);
+  `boardIssue` menegakkan monoton EV; bootstrap rank range kini rank EV
+  (odds tetap per baris); ablasi re-ranking diukur pada ranking EV;
+  gate D8 DIPENSIUNKAN (masih dihitung + dilaporkan di integrity strip,
+  tidak lagi menggagalkan build). EV rank-1 BitFi Basis $35.830.169;
+  EV top-10 = BitFi, USDD, Veda, Steakhouse, Polymarket, Sentora, Cian,
+  OpenTrade, Plume, Tori; total EV $785.907.488; overlap fitted-vs-EV
+  6/10; max displacement 143 (Nonce fitted #10 → EV #153); Spearman
+  0,6536 — semua cocok dengan hitungan independen ev-doc. Verdict tetap
+  FARM 104 / THIN 80 / SKIP 14 (verdict per baris, bukan dari ranking).
+  Ablasi EV-basis: no-cat 182/198 bergerak, max 68, top-10 7/10 (dulu
+  193/90 pada basis implied); semua term tetap KEEP.
+- **T2 evidence DI board:** seksi "OUT-OF-SAMPLE EVIDENCE" di atas board
+  (renderEvidence, semua angka dari data.js, 2 desimal): walk-forward
+  pooled 1.25 / 77,3%, LOO 1.29, split 1.17, coverage LOO 82,0% /
+  split 84,2%, odds AUC 0,76, Brier 0,20 (base 0,25), tabel ablasi 4
+  term. Dashboard 64.519 B (html 7.605 + js 46.534 + css 10.380) ≤ 65.000
+  target: prose methodology dipotong dulu; strip/sandbox/angka validasi
+  tidak dipotong. Kompaksi vertikal (lede/KPI/controls) supaya seksi
+  evidence tampil utuh di screenshot board 1440×900 (632–849px).
+- **T3 verdict (TINJAUAN — PERTAHANKAN):** distribusi $/jam median
+  $116,12 (164/198 > $25) dan break-even median 9,25e-06 dihitung dengan
+  script independen kedua. Kandidat A ($/jam ≥ $25 DAN net > $0) = 164
+  baris (LEBIH longgar); kandidat B (A + BE ≤ 1e-5) = 104 — identik
+  dengan saat ini, karena semua 104 FARM sudah memenuhi A (net sudah
+  memuat opportunity 5%/tahun = proksi T-bill). Ambang BE lebih ketat
+  (5e-6 → 44, 2e-6 → 4) hanya potong persentil tanpa alasan
+  biaya/liputan — menolak meniru angka pesaing. Laporan:
+  `verification/verdict-review-radar5.md`. Methodology mencatat hasil
+  tinjauan; verdict counts tidak berubah.
+- **T4 odds (TINJAUAN — PERTAHANKAN):** koefisien diverifikasi ulang
+  dari kode (intercept −3,040781, ln age 0,446892, growth −3,061039,
+  peer 1,329665); kontribusi tiap suku pada Steakhouse/Sentora/BitFi/
+  Nonce dihitung; peer mendominasi varians (SD 1,123 vs age 0,447)
+  karena live share antar kategori memang menyebar 0,128–0,857
+  (Risk Curators 5/39 vs Lending 59/75). Kalibrasi per desil tracking
+  live share (selisih maks 0,083); AUC 0,7647; Brier 0,1959 vs base
+  0,2476. Tidak ada bug/prior salah — tidak di-tune ke pesaing.
+  Laporan: `verification/odds-review-radar5.md`. Brier masuk payload
+  + verify V16.
+- **T5 screenshot:** 1440×900 via Playwright Chromium (BUKAN 1280×720:
+  gate V7 mensyaratkan short side ≥ 800, seperti dicatat radar-4).
+  1-board.png 190.353 B (evidence utuh + KPI rank-1 EV terlihat;
+  baris board pertama di 928px, tepat di bawah fold — diterima karena
+  spec T5 hanya mensyaratkan evidence + EV rank-1 terlihat),
+  2-detail.png 287.594 B (#p=bitfi-basis), 3-filtered.png 190.780 B
+  (Risk Curators, 34 rows). Loop titik-tetap F1: 5 siklus, TIDAK
+  konvergen eksak — osilasi ±~600 B karena ukuran PNG bergantung pada
+  digit angka strip yang dirender. Dipakai siklus 4 (terbaik):
+  strip di PNG 958.514 B vs dossier hasil rebuild 958.322 B (selisih
+  192 B / 0,02%, stale). Lihat build-log-radar5.md; ini temuan terbuka
+  untuk verifier/parent, bukan klaim konvergen.
+- **T6 suites (state final):** behaviour 46/46, verify 25/25
+  (V4/V10/V16/V17/V23/V24/V26 diperbarui untuk ranking EV; V16 mengunci
+  EV top-10 + total + Brier; V26 DOM evidence + EV rank-1), hash
+  edge-case 10/10, double-run `diff -r` bersih (V1, dua run segar dari
+  state repo yang sama). Board hash `04d04c8a…` (516.068 B); dossier
+  958.322 B, sha `0d16ce70…`; runtime ~1,0 dtk/run.
+- **Tidak dilakukan (di luar Fase B):** tidak ada push/merge ke main,
+  tidak ada bundle/check-submit/submit, tidak ada wallet baru.
